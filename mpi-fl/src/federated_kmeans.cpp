@@ -93,12 +93,10 @@ public:
     
     // Normalize pixel values from 0-255 to 0-1 range
     void normalizeFeatures(vector<double>& features) {
-        if (normalize_data) {
-            for (double& f : features) {
-                f = (f - min_value) / (max_value - min_value);
-                // Clamp to [0, 1] range
-                f = max(0.0, min(1.0, f));
-            }
+        for (double& f : features) {
+            f = (f - min_value) / (max_value - min_value);
+            // Clamp to [0, 1] range
+            f = max(0.0, min(1.0, f));
         }
     }
 
@@ -476,12 +474,10 @@ public:
     
     // Normalize pixel values from 0-255 to 0-1 range
     void normalizeFeatures(vector<double>& features) {
-        if (normalize_data) {
-            for (double& f : features) {
-                f = (f - min_value) / (max_value - min_value);
-                // Clamp to [0, 1] range
-                f = max(0.0, min(1.0, f));
-            }
+        for (double& f : features) {
+            f = (f - min_value) / (max_value - min_value);
+            // Clamp to [0, 1] range
+            f = max(0.0, min(1.0, f));
         }
     }
 
