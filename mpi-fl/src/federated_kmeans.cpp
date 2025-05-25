@@ -13,6 +13,8 @@ using namespace std;
 
 const int image_width = 28;
 const int image_height = 28;
+const double min_value = 0.0;
+const double max_value = 255.0;
 
 struct Point {
     vector<double> features;
