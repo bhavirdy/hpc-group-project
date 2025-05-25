@@ -16,6 +16,7 @@ NUM_PROCESSES=${3:-4}  # Default to 4 processes if not specified
 # Check if data file exists
 if [ ! -f "$DATA_FILE" ]; then
     echo "Error: Data file '$DATA_FILE' not found!"
+    exit 1
 fi
 
 # Compile the program
