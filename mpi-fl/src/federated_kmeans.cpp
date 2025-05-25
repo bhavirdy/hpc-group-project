@@ -11,6 +11,9 @@
 
 using namespace std;
 
+const int image_width = 28;
+const int image_height = 28;
+
 struct Point {
     vector<double> features;
     int label;
@@ -58,17 +61,18 @@ public:
             while (getline(file, line)) {
                 istringstream iss(line);
                 vector<double> features;
-                string value;
+                string pixel_value;
                 
-                while (getline(iss, value, ',')) {
+                while (getline(iss, pixel_value, ',')) {
                     try {
-                        features.push_back(stod(value));
+                        features.push_back(stod(pixel_value));
                     } catch (...) {
                         continue;
                     }
                 }
                 
                 if (!features.empty()) {
+                    normalizeFeatures(features);
                     all_data.push_back(Point(features));
                 }
             }
@@ -87,6 +91,17 @@ public:
         }
     }
     
+    // Normalize pixel values from 0-255 to 0-1 range
+    void normalizeFeatures(vector<double>& features) {
+        if (normalize_data) {
+            for (double& f : features) {
+                f = (f - min_value) / (max_value - min_value);
+                // Clamp to [0, 1] range
+                f = max(0.0, min(1.0, f));
+            }
+        }
+    }
+
     void distributeHeterogeneousData(const vector<Point>& all_data) {
         int total_points = all_data.size();
         int workers = size - 1;  // Exclude server
@@ -121,33 +136,71 @@ public:
     }
     
     void applyTransformation(Point& point, int worker_id) {
+        vector<double> transformed_image = point.features;
+
         // Apply different transformations to simulate data heterogeneity
         switch (worker_id % 4) {
-            case 1: // Scaling transformation
-                for (double& f : point.features) {
-                    f *= 1.2;
-                }
+            case 1: // 90-degree rotation
+                transformed_image = rotateImage90(transformed_image);
                 break;
-            case 2: // Noise addition
-                {
-                    random_device rd;
-                    mt19937 gen(rd());
-                    normal_distribution<> noise(0.0, 0.1);
-                    for (double& f : point.features) {
-                        f += noise(gen);
-                    }
-                }
+                
+            case 2: // 180-degree rotation
+                transformed_image = rotateImage180(transformed_image);
                 break;
-            case 3: // Offset transformation
-                for (double& f : point.features) {
-                    f += 0.5;
-                }
+                
+            case 3: // 270-degree rotation
+                transformed_image = rotateImage270(transformed_image);
                 break;
             default: // No transformation
                 break;
         }
     }
     
+    // Rotate image 90 degrees clockwise
+    vector<double> rotateImage90(const vector<double>& image) {
+        vector<double> rotated(image.size());
+        for (int y = 0; y < image_height; y++) {
+            for (int x = 0; x < image_width; x++) {
+                int old_idx = y * image_width + x;
+                int new_x = image_height - 1 - y;
+                int new_y = x;
+                int new_idx = new_y * image_width + new_x;
+                rotated[new_idx] = image[old_idx];
+            }
+        }
+        return rotated;
+    }
+    
+    // Rotate image 180 degrees
+    vector<double> rotateImage180(const vector<double>& image) {
+        vector<double> rotated(image.size());
+        for (int y = 0; y < image_height; y++) {
+            for (int x = 0; x < image_width; x++) {
+                int old_idx = y * image_width + x;
+                int new_x = image_width - 1 - x;
+                int new_y = image_height - 1 - y;
+                int new_idx = new_y * image_width + new_x;
+                rotated[new_idx] = image[old_idx];
+            }
+        }
+        return rotated;
+    }
+    
+    // Rotate image 270 degrees clockwise
+    vector<double> rotateImage270(const vector<double>& image) {
+        vector<double> rotated(image.size());
+        for (int y = 0; y < image_height; y++) {
+            for (int x = 0; x < image_width; x++) {
+                int old_idx = y * image_width + x;
+                int new_x = y;
+                int new_y = image_width - 1 - x;
+                int new_idx = new_y * image_width + new_x;
+                rotated[new_idx] = image[old_idx];
+            }
+        }
+        return rotated;
+    }
+
     void receiveLocalData() {
         // Receive dimensions
         MPI_Recv(&dimensions, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
@@ -167,7 +220,7 @@ public:
         cout << "Worker " << rank << " received " << local_size << " points" << endl;
     }
     
-    void InitialiseCentroids() {
+    void initialiseCentroids() {
         if (rank == 0) {
             // Server Initialises random centroids
             random_device rd;
@@ -323,7 +376,7 @@ public:
     }
     
     void train() {
-        InitialiseCentroids();
+        initialiseCentroids();
         
         double prev_inertia = numeric_limits<double>::max();
         
@@ -398,17 +451,18 @@ public:
         while (getline(file, line)) {
             istringstream iss(line);
             vector<double> features;
-            string value;
+            string pixel_value;
             
-            while (getline(iss, value, ',')) {
+            while (getline(iss, pixel_value, ',')) {
                 try {
-                    features.push_back(stod(value));
+                    features.push_back(stod(pixel_value));
                 } catch (...) {
                     continue;
                 }
             }
             
             if (!features.empty()) {
+                normalizeFeatures(features);
                 data.push_back(Point(features));
             }
         }
@@ -420,6 +474,17 @@ public:
         }
     }
     
+    // Normalize pixel values from 0-255 to 0-1 range
+    void normalizeFeatures(vector<double>& features) {
+        if (normalize_data) {
+            for (double& f : features) {
+                f = (f - min_value) / (max_value - min_value);
+                // Clamp to [0, 1] range
+                f = max(0.0, min(1.0, f));
+            }
+        }
+    }
+
     double euclideanDistance(const vector<double>& a, const vector<double>& b) {
         double sum = 0.0;
         for (size_t i = 0; i < a.size(); i++) {

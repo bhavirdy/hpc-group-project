@@ -16,9 +16,6 @@ NUM_PROCESSES=${3:-4}  # Default to 4 processes if not specified
 # Check if data file exists
 if [ ! -f "$DATA_FILE" ]; then
     echo "Error: Data file '$DATA_FILE' not found!"
-    echo "Generating sample data..."
-    python3 generate_sample_data.py
-    DATA_FILE="sample_data.csv"
 fi
 
 # Compile the program
@@ -41,9 +38,6 @@ echo ""
 if command -v srun &> /dev/null; then
     echo "Detected SLURM environment, using srun..."
     srun -n $NUM_PROCESSES ./federated_kmeans $DATA_FILE $K_CLUSTERS
-elif [ -f "hostfile" ]; then
-    echo "Using hostfile for multi-node execution..."
-    mpirun -np $NUM_PROCESSES -hostfile hostfile ./federated_kmeans $DATA_FILE $K_CLUSTERS
 else
     echo "Running locally..."
     mpirun -np $NUM_PROCESSES ./federated_kmeans $DATA_FILE $K_CLUSTERS
