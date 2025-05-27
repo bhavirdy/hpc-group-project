@@ -1,4 +1,8 @@
 #include <mpi.h>
+
+#include <unistd.h>   // for gethostname
+#include <limits.h>   // for HOST_NAME_MAX or define a max length for hostname buffer
+
 #include <iostream>
 #include <vector>
 #include <fstream>
@@ -584,6 +588,13 @@ int main(int argc, char* argv[]) {
     int rank, size;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
+
+    // Get the hostname of the node this process is running on
+    char hostname[HOST_NAME_MAX];
+    gethostname(hostname, HOST_NAME_MAX);
+
+    // Print which node the process is running on
+    std::cout << "Process " << rank << " running on node " << hostname << std::endl;
     
     if (argc < 3) {
         if (rank == 0) {
@@ -625,7 +636,7 @@ int main(int argc, char* argv[]) {
         cout << "\nFederated training time: " << fed_time << " seconds" << endl;
     }
     
-    fed_kmeans.printResults();
+    //fed_kmeans.printResults();
     
     // Centralised comparison
     if (rank == 0) {
@@ -638,7 +649,7 @@ int main(int argc, char* argv[]) {
         double cent_time = MPI_Wtime() - start_time;
         
         cout << "Centralised training time: " << cent_time << " seconds" << endl;
-        cent_kmeans.printResults();
+        //cent_kmeans.printResults();
         
         cout << "\n=== Performance Comparison ===" << endl;
         cout << "Federated time: " << fed_time << "s" << endl;
