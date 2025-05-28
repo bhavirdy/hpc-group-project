@@ -572,7 +572,7 @@ int main(int argc, char* argv[]) {
         cout << "\nFederated training time: " << fed_time << " seconds" << endl;
     }
     
-    fed_kmeans.printResults();
+    //fed_kmeans.printResults();
         
     // Centralized comparison
     if (rank == 0) {
@@ -585,14 +585,11 @@ int main(int argc, char* argv[]) {
         double cent_time = MPI_Wtime() - start_time;
         
         cout << "Centralized training time: " << cent_time << " seconds" << endl;
-        cent_kmeans.printResults();
+        //cent_kmeans.printResults();
         
         cout << "\n=== Performance Comparison ===" << endl;
         cout << "Federated time: " << fed_time << "s" << endl;
         cout << "Centralized time: " << cent_time << "s" << endl;
-        if (cent_time > 0) {
-            cout << "Speedup: " << cent_time / fed_time << "x" << endl;
-        }
     }
     
     MPI_Finalize();
