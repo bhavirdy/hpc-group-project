@@ -1,8 +1,6 @@
 #include <mpi.h>
-
-#include <unistd.h>   // for gethostname
-#include <limits.h>   // for HOST_NAME_MAX or define a max length for hostname buffer
-
+#include <unistd.h>
+#include <limits.h>   
 #include <iostream>
 #include <vector>
 #include <fstream>
@@ -12,13 +10,9 @@
 #include <cmath>
 #include <iomanip>
 #include <map>
+#include <filesystem>
 
 using namespace std;
-
-const int image_width = 28;
-const int image_height = 28;
-const double min_value = 0.0;
-const double max_value = 255.0;
 
 struct Point {
     vector<double> features;
@@ -55,181 +49,101 @@ public:
         MPI_Comm_size(MPI_COMM_WORLD, &size);
     }
     
-    // Load and distribute data with heterogeneity simulation
+    vector<string> findDataFiles(const string& directory = "./data/uci_har/processed_data/split_data") {
+        vector<string> files;
+        for (const auto& entry : filesystem::directory_iterator(directory)) {
+            if (entry.path().extension() == ".csv") {
+                files.push_back(entry.path().string());
+            }
+        }
+        sort(files.begin(), files.end());
+        return files;
+    }
+    
     void loadData(const string& filename) {
-        vector<Point> all_data;
+        ifstream file(filename);
+        if (!file.is_open()) {
+            cout << "Worker " << rank << " could not open: " << filename << endl;
+            return;
+        }
         
+        string line;
+        while (getline(file, line)) {
+            if (line.empty()) continue;
+            
+            istringstream iss(line);
+            vector<double> features;
+            string value;
+            
+            while (getline(iss, value, ',')) {
+                try {
+                    features.push_back(stod(value));
+                } catch (...) {
+                    continue;
+                }
+            }
+            
+            if (!features.empty()) {
+                if (dimensions == 0) {
+                    dimensions = features.size();
+                }
+                if (features.size() == dimensions) {
+                    local_data.push_back(Point(features));
+                }
+            }
+        }
+        
+        cout << "Worker " << rank << " loaded " << local_data.size() << " points" << endl;
+    }
+    
+    void distributeData() {
         if (rank == 0) {
-            // Server loads all data
-            ifstream file(filename);
-            string line;
+            // Server distributes files
+            vector<string> files = findDataFiles();
+            int num_workers = size - 1;
             
-            while (getline(file, line)) {
-                istringstream iss(line);
-                vector<double> features;
-                string pixel_value;
+            cout << "Distributing " << files.size() << " files to " << num_workers << " workers" << endl;
+            
+            // Round-robin distribution
+            for (int i = 0; i < files.size(); i++) {
+                int worker = (i % num_workers) + 1;
+                string filename = files[i];
+                int len = filename.length();
                 
-                while (getline(iss, pixel_value, ',')) {
-                    try {
-                        features.push_back(stod(pixel_value));
-                    } catch (...) {
-                        continue;
-                    }
-                }
-                
-                if (!features.empty()) {
-                    normalizeFeatures(features);
-                    all_data.push_back(Point(features));
-                }
+                MPI_Send(&len, 1, MPI_INT, worker, 0, MPI_COMM_WORLD);
+                MPI_Send(filename.c_str(), len, MPI_CHAR, worker, 1, MPI_COMM_WORLD);
             }
             
-            if (!all_data.empty()) {
-                dimensions = all_data[0].features.size();
-                cout << "Loaded " << all_data.size() << " points with " 
-                         << dimensions << " dimensions" << endl;
+            // Send termination signal
+            for (int worker = 1; worker < size; worker++) {
+                int len = 0;
+                MPI_Send(&len, 1, MPI_INT, worker, 0, MPI_COMM_WORLD);
             }
             
-            // Simulate data heterogeneity by applying different transformations
-            distributeHeterogeneousData(all_data);
         } else {
-            // Workers receive their portion
-            receiveLocalData();
-        }
-    }
-    
-    // Normalize pixel values from 0-255 to 0-1 range
-    void normalizeFeatures(vector<double>& features) {
-        for (double& f : features) {
-            f = (f - min_value) / (max_value - min_value);
-            // Clamp to [0, 1] range
-            f = max(0.0, min(1.0, f));
-        }
-    }
-
-    void distributeHeterogeneousData(const vector<Point>& all_data) {
-        int total_points = all_data.size();
-        int workers = size - 1;  // Exclude server
-        
-        // Send dimensions to all workers
-        for (int i = 1; i < size; i++) {
-            MPI_Send(&dimensions, 1, MPI_INT, i, 0, MPI_COMM_WORLD);
-        }
-        
-        // Distribute data with heterogeneity
-        for (int worker = 1; worker < size; worker++) {
-            int start_idx = (worker - 1) * total_points / workers;
-            int end_idx = worker * total_points / workers;
-            int local_size = end_idx - start_idx;
-            
-            // Send local data size
-            MPI_Send(&local_size, 1, MPI_INT, worker, 1, MPI_COMM_WORLD);
-            
-            // Apply transformation based on worker ID to simulate heterogeneity
-            vector<Point> transformed_data;
-            for (int i = start_idx; i < end_idx; i++) {
-                Point p = all_data[i];
-                applyTransformation(p, worker);
-                transformed_data.push_back(p);
-            }
-            
-            // Send transformed data
-            for (const auto& point : transformed_data) {
-                MPI_Send(point.features.data(), dimensions, MPI_DOUBLE, worker, 2, MPI_COMM_WORLD);
-            }
-        }
-    }
-    
-    void applyTransformation(Point& point, int worker_id) {
-        vector<double> transformed_image = point.features;
-
-        // Apply different transformations to simulate data heterogeneity
-        switch (worker_id % 4) {
-            case 1: // 90-degree rotation
-                transformed_image = rotateImage90(transformed_image);
-                break;
+            // Workers receive and load their files
+            while (true) {
+                int len;
+                MPI_Recv(&len, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
                 
-            case 2: // 180-degree rotation
-                transformed_image = rotateImage180(transformed_image);
-                break;
+                if (len == 0) break; // No more files
                 
-            case 3: // 270-degree rotation
-                transformed_image = rotateImage270(transformed_image);
-                break;
-            default: // No transformation
-                break;
-        }
-    }
-    
-    // Rotate image 90 degrees clockwise
-    vector<double> rotateImage90(const vector<double>& image) {
-        vector<double> rotated(image.size());
-        for (int y = 0; y < image_height; y++) {
-            for (int x = 0; x < image_width; x++) {
-                int old_idx = y * image_width + x;
-                int new_x = image_height - 1 - y;
-                int new_y = x;
-                int new_idx = new_y * image_width + new_x;
-                rotated[new_idx] = image[old_idx];
+                char* buffer = new char[len + 1];
+                MPI_Recv(buffer, len, MPI_CHAR, 0, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                buffer[len] = '\0';
+                
+                loadData(string(buffer));
+                delete[] buffer;
             }
         }
-        return rotated;
-    }
-    
-    // Rotate image 180 degrees
-    vector<double> rotateImage180(const vector<double>& image) {
-        vector<double> rotated(image.size());
-        for (int y = 0; y < image_height; y++) {
-            for (int x = 0; x < image_width; x++) {
-                int old_idx = y * image_width + x;
-                int new_x = image_width - 1 - x;
-                int new_y = image_height - 1 - y;
-                int new_idx = new_y * image_width + new_x;
-                rotated[new_idx] = image[old_idx];
-            }
-        }
-        return rotated;
-    }
-    
-    // Rotate image 270 degrees clockwise
-    vector<double> rotateImage270(const vector<double>& image) {
-        vector<double> rotated(image.size());
-        for (int y = 0; y < image_height; y++) {
-            for (int x = 0; x < image_width; x++) {
-                int old_idx = y * image_width + x;
-                int new_x = y;
-                int new_y = image_width - 1 - x;
-                int new_idx = new_y * image_width + new_x;
-                rotated[new_idx] = image[old_idx];
-            }
-        }
-        return rotated;
     }
 
-    void receiveLocalData() {
-        // Receive dimensions
-        MPI_Recv(&dimensions, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        
-        // Receive local data size
-        int local_size;
-        MPI_Recv(&local_size, 1, MPI_INT, 0, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        
-        // Receive local data
-        local_data.resize(local_size);
-        for (int i = 0; i < local_size; i++) {
-            vector<double> features(dimensions);
-            MPI_Recv(features.data(), dimensions, MPI_DOUBLE, 0, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            local_data[i] = Point(features);
-        }
-        
-        cout << "Worker " << rank << " received " << local_size << " points" << endl;
-    }
-    
     void initialiseCentroids() {
         if (rank == 0) {
-            // Server Initialises random centroids
+            // Server initializes random centroids
             random_device rd;
             mt19937 gen(rd());
-            uniform_real_distribution<> dis(-1.0, 1.0);
+            uniform_real_distribution<> dis(-50.0, 50.0);
             
             global_centroids.resize(k);
             for (int i = 0; i < k; i++) {
@@ -248,6 +162,12 @@ public:
     }
     
     void broadcastCentroids() {
+        // Broadcast dimensions first
+        for (int worker = 1; worker < size; worker++) {
+            MPI_Send(&dimensions, 1, MPI_INT, worker, 16, MPI_COMM_WORLD);
+        }
+        
+        // Broadcast centroids
         for (int worker = 1; worker < size; worker++) {
             for (int i = 0; i < k; i++) {
                 MPI_Send(global_centroids[i].center.data(), dimensions, 
@@ -257,6 +177,9 @@ public:
     }
     
     void receiveCentroids() {
+        // Receive dimensions (in case worker doesn't have data)
+        MPI_Recv(&dimensions, 1, MPI_INT, 0, 16, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        
         global_centroids.resize(k);
         for (int i = 0; i < k; i++) {
             global_centroids[i].center.resize(dimensions);
@@ -275,8 +198,13 @@ public:
     }
     
     void localKMeansStep() {
-        // Initialise local centroids
+        // Initialize local centroids
         local_centroids.assign(k, Centroid(dimensions));
+        
+        // Skip if no local data (idle worker)
+        if (local_data.empty()) {
+            return;
+        }
         
         // Assign points to clusters and update local centroids
         for (auto& point : local_data) {
@@ -316,7 +244,7 @@ public:
             vector<Centroid> aggregated_centroids(k, Centroid(dimensions));
             vector<int> total_counts(k, 0);
             
-            // Collect from all workers
+            // Collect from all workers (including idle ones)
             for (int worker = 1; worker < size; worker++) {
                 for (int i = 0; i < k; i++) {
                     vector<double> worker_centroid(dimensions);
@@ -346,8 +274,9 @@ public:
             
             // Broadcast updated centroids
             broadcastCentroids();
-        } else {
-            // Workers send their local centroids
+        } 
+        else {
+            // Workers send their local centroids (even idle workers send zeros)
             for (int i = 0; i < k; i++) {
                 MPI_Send(local_centroids[i].center.data(), dimensions, 
                         MPI_DOUBLE, 0, 4, MPI_COMM_WORLD);
@@ -422,20 +351,24 @@ public:
         }
         
         // Each worker prints local statistics
-        map<int, int> local_cluster_counts;
-        for (const auto& point : local_data) {
-            local_cluster_counts[point.label]++;
-        }
-        
-        cout << "\nWorker " << rank << " cluster assignments:" << endl;
-        for (const auto& pair : local_cluster_counts) {
-            cout << "  Cluster " << pair.first << ": " << pair.second << " points" << endl;
+        if (!local_data.empty()) {
+            map<int, int> local_cluster_counts;
+            for (const auto& point : local_data) {
+                local_cluster_counts[point.label]++;
+            }
+            
+            cout << "\nWorker " << rank << " cluster assignments:" << endl;
+            for (const auto& pair : local_cluster_counts) {
+                cout << "  Cluster " << pair.first << ": " << pair.second << " points" << endl;
+            }
+        } else if (rank != 0) {
+            cout << "\nWorker " << rank << " had no data (idle)" << endl;
         }
     }
 };
 
-// Centralised K-Means for comparison
-class CentralisedKMeans {
+// Centralized K-Means for comparison
+class CentralizedKMeans {
 private:
     int k;
     int dimensions;
@@ -445,48 +378,45 @@ private:
     vector<Centroid> centroids;
     
 public:
-    CentralisedKMeans(int k_clusters, int max_iter = 100, double tol = 1e-6) 
+    CentralizedKMeans(int k_clusters, int max_iter = 100, double tol = 1e-6) 
                       : k(k_clusters), max_iterations(max_iter), tolerance(tol) {}
     
     void loadData(const string& filename) {
         ifstream file(filename);
+        if (!file.is_open()) {
+            cout << "Could not open " << filename << " for centralized comparison" << endl;
+            return;
+        }
+        
         string line;
         
         while (getline(file, line)) {
+            if (line.empty()) continue;
+            
             istringstream iss(line);
             vector<double> features;
-            string pixel_value;
+            string value;
             
-            while (getline(iss, pixel_value, ',')) {
+            while (getline(iss, value, ',')) {
                 try {
-                    features.push_back(stod(pixel_value));
+                    features.push_back(stod(value));
                 } catch (...) {
                     continue;
                 }
             }
             
             if (!features.empty()) {
-                normalizeFeatures(features);
                 data.push_back(Point(features));
             }
         }
         
         if (!data.empty()) {
             dimensions = data[0].features.size();
-            cout << "Centralised: Loaded " << data.size() << " points with " 
+            cout << "Centralized: Loaded " << data.size() << " points with " 
                      << dimensions << " dimensions" << endl;
         }
     }
     
-    // Normalize pixel values from 0-255 to 0-1 range
-    void normalizeFeatures(vector<double>& features) {
-        for (double& f : features) {
-            f = (f - min_value) / (max_value - min_value);
-            // Clamp to [0, 1] range
-            f = max(0.0, min(1.0, f));
-        }
-    }
-
     double euclideanDistance(const vector<double>& a, const vector<double>& b) {
         double sum = 0.0;
         for (size_t i = 0; i < a.size(); i++) {
@@ -497,10 +427,12 @@ public:
     }
     
     void train() {
-        // Initialise centroids randomly
+        if (data.empty()) return;
+        
+        // Initialize centroids randomly
         random_device rd;
         mt19937 gen(rd());
-        uniform_real_distribution<> dis(-1.0, 1.0);
+        uniform_real_distribution<> dis(-50.0, 50.0);
         
         centroids.resize(k);
         for (int i = 0; i < k; i++) {
@@ -557,11 +489,11 @@ public:
                 inertia += dist * dist;
             }
             
-            cout << "Centralised Iteration " << iteration + 1 << ", Inertia: " 
+            cout << "Centralized Iteration " << iteration + 1 << ", Inertia: " 
                      << fixed << setprecision(6) << inertia << endl;
             
             if (abs(prev_inertia - inertia) < tolerance) {
-                cout << "Centralised converged after " << iteration + 1 << " iterations" << endl;
+                cout << "Centralized converged after " << iteration + 1 << " iterations" << endl;
                 break;
             }
             
@@ -570,7 +502,7 @@ public:
     }
     
     void printResults() {
-        cout << "\nCentralised Final Centroids:" << endl;
+        cout << "\nCentralized Final Centroids:" << endl;
         for (int i = 0; i < k; i++) {
             cout << "Cluster " << i << ": ";
             for (int j = 0; j < dimensions; j++) {
@@ -596,21 +528,21 @@ int main(int argc, char* argv[]) {
     // Print which node the process is running on
     std::cout << "Process " << rank << " running on node " << hostname << std::endl;
     
-    if (argc < 3) {
+    if (argc < 2) {
         if (rank == 0) {
-            cerr << "Usage: " << argv[0] << " <data_file> <k_clusters>" << endl;
-            cerr << "Example: " << argv[0] << " data.csv 3" << endl;
+            cerr << "Usage: " << argv[0] << " <k_clusters>" << endl;
+            cerr << "Example: " << argv[0] << endl;
         }
         MPI_Finalize();
         return 1;
     }
     
-    string data_file = argv[1];
-    int k = stoi(argv[2]);
+    int k = stoi(argv[1]);
+    string centralized_file = "./data/uci_har/processed_data/X_train_pca.csv";
     
-    if (size < 3) {
+    if (size < 2) {
         if (rank == 0) {
-            cerr << "This program requires at least 3 processes (1 server + 2 workers)" << endl;
+            cerr << "This program requires at least 2 processes (1 server + 1 worker)" << endl;
         }
         MPI_Finalize();
         return 1;
@@ -619,14 +551,13 @@ int main(int argc, char* argv[]) {
     if (rank == 0) {
         cout << "=== Federated K-Means Clustering ===" << endl;
         cout << "Processes: " << size << " (1 server + " << (size-1) << " workers)" << endl;
-        cout << "Data file: " << data_file << endl;
         cout << "K clusters: " << k << endl;
         cout << endl;
     }
     
     // Federated Learning
     FederatedKMeans fed_kmeans(k);
-    fed_kmeans.loadData(data_file);
+    fed_kmeans.distributeData();
     
     double start_time = MPI_Wtime();
     fed_kmeans.train();
@@ -636,25 +567,27 @@ int main(int argc, char* argv[]) {
         cout << "\nFederated training time: " << fed_time << " seconds" << endl;
     }
     
-    //fed_kmeans.printResults();
-    
-    // Centralised comparison
+    fed_kmeans.printResults();
+        
+    // Centralized comparison
     if (rank == 0) {
-        cout << "\n=== Centralised K-Means (Baseline) ===" << endl;
-        CentralisedKMeans cent_kmeans(k);
-        cent_kmeans.loadData(data_file);
+        cout << "\n=== Centralized K-Means ===" << endl;
+        CentralizedKMeans cent_kmeans(k);
+        cent_kmeans.loadData(centralized_file);
         
         start_time = MPI_Wtime();
         cent_kmeans.train();
         double cent_time = MPI_Wtime() - start_time;
         
-        cout << "Centralised training time: " << cent_time << " seconds" << endl;
-        //cent_kmeans.printResults();
+        cout << "Centralized training time: " << cent_time << " seconds" << endl;
+        cent_kmeans.printResults();
         
         cout << "\n=== Performance Comparison ===" << endl;
         cout << "Federated time: " << fed_time << "s" << endl;
-        cout << "Centralised time: " << cent_time << "s" << endl;
-        cout << "Speedup: " << cent_time / fed_time << "x" << endl;
+        cout << "Centralized time: " << cent_time << "s" << endl;
+        if (cent_time > 0) {
+            cout << "Speedup: " << cent_time / fed_time << "x" << endl;
+        }
     }
     
     MPI_Finalize();

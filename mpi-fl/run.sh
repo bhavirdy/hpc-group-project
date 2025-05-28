@@ -35,14 +35,7 @@ echo "  K clusters: $K_CLUSTERS"
 echo "  Processes: $NUM_PROCESSES"
 echo ""
 
-# Check if we're running on a cluster with SLURM
-if command -v srun &> /dev/null; then
-    echo "Detected SLURM environment, using srun..."
-    srun -n $NUM_PROCESSES ./federated_kmeans $DATA_FILE $K_CLUSTERS
-else
-    echo "Running locally..."
-    mpirun -np $NUM_PROCESSES ./federated_kmeans $DATA_FILE $K_CLUSTERS
-fi
+mpirun -np $NUM_PROCESSES ./federated_kmeans $DATA_FILE $K_CLUSTERS
 
 echo ""
 echo "Execution completed!"
