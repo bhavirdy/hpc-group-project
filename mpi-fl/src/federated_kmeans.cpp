@@ -35,7 +35,7 @@ class FederatedKMeans {
 private:
     int rank, size;
     int k;  // number of clusters
-    int dimensions;
+    int dimensions = 100;
     int max_iterations;
     double tolerance;
     vector<Point> local_data;
@@ -140,7 +140,7 @@ public:
                 char* buffer = new char[len + 1];
                 MPI_Recv(buffer, len, MPI_CHAR, 0, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
                 buffer[len] = '\0';
-                
+
                 string filename(buffer);
                 cout << "Worker " << rank << " received filename: " << filename << endl;
                 loadData(string(buffer));
