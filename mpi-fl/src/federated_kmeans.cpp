@@ -51,9 +51,14 @@ public:
     
     vector<string> findDataFiles(const string& directory = "./data/uci_har/processed_data/split_data") {
         vector<string> files;
-        for (const auto& entry : filesystem::directory_iterator(directory)) {
-            if (entry.path().extension() == ".csv") {
-                files.push_back(entry.path().string());
+        if (!filesystem::exists(directory)) {
+            if (rank == 0) {
+                cout << "Directory does not exist: " << directory << endl;
+            }
+            for (const auto& entry : filesystem::directory_iterator(directory)) {
+                if (entry.path().extension() == ".csv") {
+                    files.push_back(entry.path().string());
+                }
             }
         }
         sort(files.begin(), files.end());
