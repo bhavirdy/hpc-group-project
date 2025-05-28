@@ -100,7 +100,6 @@ public:
             }
         }
         
-        cout << "Worker " << rank << " loaded " << local_data.size() << " points" << endl;
     }
     
     void distributeData() {
@@ -116,8 +115,6 @@ public:
                 int worker = (i % num_workers) + 1;
                 string filename = files[i];
                 int len = filename.length();
-
-                cout << "Sending " << filename << " to worker " << worker << endl;
                 
                 MPI_Send(&len, 1, MPI_INT, worker, 0, MPI_COMM_WORLD);
                 MPI_Send(filename.c_str(), len, MPI_CHAR, worker, 1, MPI_COMM_WORLD);
@@ -141,8 +138,6 @@ public:
                 MPI_Recv(buffer, len, MPI_CHAR, 0, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
                 buffer[len] = '\0';
 
-                string filename(buffer);
-                cout << "Worker " << rank << " received filename: " << filename << endl;
                 loadData(string(buffer));
                 delete[] buffer;
             }
