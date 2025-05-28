@@ -1,6 +1,6 @@
 # Makefile for Federated K-Means Clustering
 CXX = mpicxx
-CXXFLAGS = -std=c++11 -O3 -Wall -Wextra
+CXXFLAGS = -std=c++17 -O3 -Wall -Wextra
 TARGET = federated_kmeans
 SOURCES = src/federated_kmeans.cpp
 
