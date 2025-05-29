@@ -345,9 +345,11 @@ public:
             out.close();
             cout << "Worker " << rank << " finished writing: " << out_path << endl;
         }
-
     }
    
+    bool fileToDataEmpty() const {
+        return file_to_data.empty();
+    }
 };
 
 
@@ -537,7 +539,9 @@ int main(int argc, char* argv[]) {
     double fed_time = MPI_Wtime() - start_time;
     MPI_Barrier(MPI_COMM_WORLD);
 
-    fed_kmeans.exportClusterAssignments();
+    if (!fed_kmeans.fileToDataEmpty()) {
+        fed_kmeans.exportClusterAssignments();
+    }
     MPI_Barrier(MPI_COMM_WORLD);
     
     if (rank == 0) {
