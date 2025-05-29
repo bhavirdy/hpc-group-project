@@ -293,12 +293,11 @@ public:
             filesystem::create_directories(output_dir);
         }
 
-        if (file_to_data.empty()) {
-                cout << "Worker " << rank << " has no data to export." << endl;
-                return;
-            }
+        cout << "Worker " << rank << " preparing to export. File count: " << file_to_data.size() << endl;
 
         for (const auto& [filepath, data] : file_to_data) {
+            cout << "Worker " << rank << " exporting file: " << filepath << ", points: " << data.size() << endl;
+            
             string filename = filesystem::path(filepath).stem();
             string out_path = output_dir + "/worker_" + to_string(rank) + "_" + filename + "_assignments.csv";
 
@@ -319,8 +318,9 @@ public:
             }
 
             out.close();
-            cout << "Worker " << rank << " wrote assignments for " << filepath << " to " << out_path << endl;
+            cout << "Worker " << rank << " finished writing: " << out_path << endl;
         }
+
     }
 
     void train() {
