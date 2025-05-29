@@ -277,32 +277,69 @@ public:
     double computeGlobalInertia() {
         double local_inertia = computeLocalInertia();
         double global_inertia = 0.0;
+        
+        // All processes must participate in MPI_Reduce
         MPI_Reduce(&local_inertia, &global_inertia, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+        
+        // Broadcast the result back to all processes so they all have the same value
+        MPI_Bcast(&global_inertia, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+        
         return global_inertia;
     }
 
     void train() {
         initialiseCentroids();
-
+        
         double prev_inertia = numeric_limits<double>::max();
-
+        bool converged = false;
+        
         for (int iteration = 0; iteration < max_iterations; iteration++) {
+            if (rank == 0) {
+                cout << "Starting iteration " << (iteration + 1) << "..." << endl;
+            }
+            
             localKMeansStep();
+            
+            if (rank == 0) {
+                cout << "Local K-means step complete, starting federated averaging..." << endl;
+            }
+            
             federatedAveraging();
-
+            
+            if (rank == 0) {
+                cout << "Federated averaging complete, computing inertia..." << endl;
+            }
+            
             double current_inertia = computeGlobalInertia();
-
+            
+            // Check convergence on master and broadcast decision to all processes
             if (rank == 0) {
                 cout << "Iteration " << iteration + 1 << ", Inertia: "
-                     << fixed << setprecision(6) << current_inertia << endl;
-
+                    << fixed << setprecision(6) << current_inertia << endl;
+                
                 if (abs(prev_inertia - current_inertia) < tolerance) {
                     cout << "Converged after " << iteration + 1 << " iterations" << endl;
-                    break;
+                    converged = true;
                 }
+                prev_inertia = current_inertia;
             }
-
-            prev_inertia = current_inertia;
+            
+            // Broadcast convergence decision to all processes
+            int converged_flag = converged ? 1 : 0;
+            MPI_Bcast(&converged_flag, 1, MPI_INT, 0, MPI_COMM_WORLD);
+            converged = (converged_flag == 1);
+            
+            // All processes must make the same decision about breaking
+            if (converged) {
+                if (rank == 0) {
+                    cout << "All processes breaking from training loop." << endl;
+                }
+                break;
+            }
+        }
+        
+        if (rank == 0) {
+            cout << "Training loop completed." << endl;
         }
     }
 
@@ -537,7 +574,7 @@ int main(int argc, char* argv[]) {
     gethostname(hostname, HOST_NAME_MAX);
 
     // Print which node the process is running on
-    std::cout << "Process " << rank << " running on node " << hostname << std::endl;
+    cout << "Process " << rank << " running on node " << hostname << endl;
     
     if (argc < 2) {
         if (rank == 0) {
@@ -568,62 +605,27 @@ int main(int argc, char* argv[]) {
     // Federated Learning
     FederatedKMeans fed_kmeans(k);
     
-    if (rank == 0) cout << "Starting data distribution..." << endl;
+    // Data distribution
     fed_kmeans.distributeData();
-    MPI_Barrier(MPI_COMM_WORLD);
     
-    if (rank == 0) cout << "Data distribution complete. Starting training..." << endl;
-    
+    // Training (this now handles synchronization internally)
     double start_time = MPI_Wtime();
     fed_kmeans.train();
     double fed_time = MPI_Wtime() - start_time;
     
-    if (rank == 0) cout << "Training complete. Synchronizing processes..." << endl;
-    MPI_Barrier(MPI_COMM_WORLD);
-    
-    if (rank == 0) cout << "Starting export phase..." << endl;
-    
-    // Only workers should attempt to export (they have the data)
-    if (rank > 0) {
-        cout << "Worker " << rank << " checking data for export..." << endl;
-        if (!fed_kmeans.fileToDataEmpty()) {
-            cout << "Worker " << rank << " starting export..." << endl;
-            fed_kmeans.exportClusterAssignments();
-            cout << "Worker " << rank << " completed export." << endl;
-        } else {
-            cout << "Worker " << rank << " has no data to export." << endl;
-        }
-    } else {
-        cout << "Master process (rank 0) skipping export phase." << endl;
+    // Export results - only workers have data
+    if (rank > 0 && !fed_kmeans.fileToDataEmpty()) {
+        fed_kmeans.exportClusterAssignments();
+        cout << "Worker " << rank << " exported cluster assignments." << endl;
     }
     
-    cout << "Process " << rank << " reached final barrier..." << endl;
-    MPI_Barrier(MPI_COMM_WORLD);
-    
+    // Final results
     if (rank == 0) {
         cout << "\n=== Results ===" << endl;
         cout << "Federated training time: " << fed_time << " seconds" << endl;
         cout << "Check ./cluster_assignments/ directory for exported results." << endl;
     }
-            
-    // Centralized comparison
-    // if (rank == 0) {
-    //     cout << "\n=== Centralized K-Means ===" << endl;
-    //     CentralizedKMeans cent_kmeans(k);
-    //     cent_kmeans.loadData(centralized_file);
-        
-    //     start_time = MPI_Wtime();
-    //     cent_kmeans.train();
-    //     double cent_time = MPI_Wtime() - start_time;
-        
-    //     cout << "Centralized training time: " << cent_time << " seconds" << endl;
-
-    //     cout << "\n=== Performance Comparison ===" << endl;
-    //     cout << "Federated time: " << fed_time << "s" << endl;
-    //     cout << "Centralized time: " << cent_time << "s" << endl;
-    // }
     
-    cout << "Process " << rank << " calling MPI_Finalize..." << endl;
     MPI_Finalize();
     return 0;
 }
