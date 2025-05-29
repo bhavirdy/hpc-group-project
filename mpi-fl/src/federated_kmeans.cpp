@@ -152,34 +152,25 @@ public:
                     global_centroids[i].center[j] = dis(gen);
                 }
             }
-
-            broadcastCentroids();
         } else {
-            receiveCentroids();
+            // Workers need to initialize their global_centroids structure
+            global_centroids.resize(k);
+            for (int i = 0; i < k; i++) {
+                global_centroids[i].center.resize(dimensions);
+            }
         }
+        
+        // Broadcast to all processes (including workers)
+        broadcastCentroids();
     }
 
     void broadcastCentroids() {
-        for (int worker = 1; worker < size; worker++) {
-            MPI_Send(&dimensions, 1, MPI_INT, worker, 16, MPI_COMM_WORLD);
-        }
-
-        for (int worker = 1; worker < size; worker++) {
-            for (int i = 0; i < k; i++) {
-                MPI_Send(global_centroids[i].center.data(), dimensions,
-                    MPI_DOUBLE, worker, 3, MPI_COMM_WORLD);
-            }
-        }
-    }
-
-    void receiveCentroids() {
-        MPI_Recv(&dimensions, 1, MPI_INT, 0, 16, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-
-        global_centroids.resize(k);
+        // Broadcast dimensions first
+        MPI_Bcast(&dimensions, 1, MPI_INT, 0, MPI_COMM_WORLD);
+        
+        // Broadcast each centroid
         for (int i = 0; i < k; i++) {
-            global_centroids[i].center.resize(dimensions);
-            MPI_Recv(global_centroids[i].center.data(), dimensions,
-                MPI_DOUBLE, 0, 3, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            MPI_Bcast(global_centroids[i].center.data(), dimensions, MPI_DOUBLE, 0, MPI_COMM_WORLD);
         }
     }
 
@@ -230,6 +221,7 @@ public:
             vector<Centroid> aggregated_centroids(k, Centroid(dimensions));
             vector<int> total_counts(k, 0);
 
+            // Receive from all workers
             for (int worker = 1; worker < size; worker++) {
                 for (int i = 0; i < k; i++) {
                     vector<double> worker_centroid(dimensions);
@@ -248,6 +240,7 @@ public:
                 }
             }
 
+            // Update global centroids
             for (int i = 0; i < k; i++) {
                 if (total_counts[i] > 0) {
                     for (int j = 0; j < dimensions; j++) {
@@ -255,17 +248,17 @@ public:
                     }
                 }
             }
-
-            broadcastCentroids();
         } else {
+            // Workers send their local centroids
             for (int i = 0; i < k; i++) {
                 MPI_Send(local_centroids[i].center.data(), dimensions,
                     MPI_DOUBLE, 0, 4, MPI_COMM_WORLD);
                 MPI_Send(&local_centroids[i].count, 1, MPI_INT, 0, 5, MPI_COMM_WORLD);
             }
-
-            receiveCentroids();
         }
+        
+        // Broadcast updated centroids to all processes
+        broadcastCentroids();
     }
 
     double computeLocalInertia() {
@@ -549,14 +542,13 @@ int main(int argc, char* argv[]) {
     if (argc < 2) {
         if (rank == 0) {
             cerr << "Usage: " << argv[0] << " <k_clusters>" << endl;
-            cerr << "Example: " << argv[0] << endl;
+            cerr << "Example: " << argv[0] << " 2" << endl;
         }
         MPI_Finalize();
         return 1;
     }
     
     int k = stoi(argv[1]);
-    string centralized_file = "./data/uci_har/processed_data/X_train_pca.csv";
     
     if (size < 2) {
         if (rank == 0) {
@@ -575,30 +567,42 @@ int main(int argc, char* argv[]) {
     
     // Federated Learning
     FederatedKMeans fed_kmeans(k);
+    
+    if (rank == 0) cout << "Starting data distribution..." << endl;
     fed_kmeans.distributeData();
     MPI_Barrier(MPI_COMM_WORLD);
-
+    
+    if (rank == 0) cout << "Data distribution complete. Starting training..." << endl;
+    
     double start_time = MPI_Wtime();
     fed_kmeans.train();
     double fed_time = MPI_Wtime() - start_time;
+    
+    if (rank == 0) cout << "Training complete. Synchronizing processes..." << endl;
     MPI_Barrier(MPI_COMM_WORLD);
-
+    
+    if (rank == 0) cout << "Starting export phase..." << endl;
+    
     // Only workers should attempt to export (they have the data)
     if (rank > 0) {
+        cout << "Worker " << rank << " checking data for export..." << endl;
         if (!fed_kmeans.fileToDataEmpty()) {
+            cout << "Worker " << rank << " starting export..." << endl;
             fed_kmeans.exportClusterAssignments();
-            cout << "Worker " << rank << " exported cluster assignments." << endl;
+            cout << "Worker " << rank << " completed export." << endl;
         } else {
             cout << "Worker " << rank << " has no data to export." << endl;
         }
     } else {
-        cout << "Master process completed coordination." << endl;
+        cout << "Master process (rank 0) skipping export phase." << endl;
     }
-
+    
+    cout << "Process " << rank << " reached final barrier..." << endl;
     MPI_Barrier(MPI_COMM_WORLD);
-
+    
     if (rank == 0) {
-        cout << "\nFederated training time: " << fed_time << " seconds" << endl;
+        cout << "\n=== Results ===" << endl;
+        cout << "Federated training time: " << fed_time << " seconds" << endl;
         cout << "Check ./cluster_assignments/ directory for exported results." << endl;
     }
             
@@ -619,6 +623,7 @@ int main(int argc, char* argv[]) {
         cout << "Centralized time: " << cent_time << "s" << endl;
     }
     
+    cout << "Process " << rank << " calling MPI_Finalize..." << endl;
     MPI_Finalize();
     return 0;
 }
