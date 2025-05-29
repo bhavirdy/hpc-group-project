@@ -535,7 +535,6 @@ int main(int argc, char* argv[]) {
     // Federated Learning
     FederatedKMeans fed_kmeans(k);
     fed_kmeans.distributeData();
-    fed_kmeans.train();
     
     double start_time = MPI_Wtime();
     fed_kmeans.train();
