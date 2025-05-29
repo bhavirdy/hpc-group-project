@@ -292,6 +292,11 @@ public:
             filesystem::create_directories(output_dir);
         }
 
+        if (file_to_data.empty()) {
+                cout << "Worker " << rank << " has no data to export." << endl;
+                return;
+            }
+
         for (const auto& [filepath, data] : file_to_data) {
             string filename = filesystem::path(filepath).stem();
             string out_path = output_dir + "/worker_" + to_string(rank) + "_" + filename + "_assignments.csv";
@@ -300,11 +305,6 @@ public:
             if (!out.is_open()) {
                 cerr << "Worker " << rank << " failed to open " << out_path << " for writing." << endl;
                 continue;
-            }
-
-            if (file_to_data.empty()) {
-                cout << "Worker " << rank << " has no data to export." << endl;
-                return;
             }
 
             for (const auto& point : data) {
