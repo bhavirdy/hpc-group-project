@@ -346,12 +346,6 @@ public:
 
             prev_inertia = current_inertia;
         }
-
-        if (!file_to_data.empty()) {
-        exportClusterAssignments();
-        } else {
-            cout << "Worker " << rank << " has no data to export." << endl;
-        }
     }
 };
 
@@ -539,6 +533,8 @@ int main(int argc, char* argv[]) {
     double start_time = MPI_Wtime();
     fed_kmeans.train();
     double fed_time = MPI_Wtime() - start_time;
+
+    fed_kmeans.exportClusterAssignments();
     
     if (rank == 0) {
         cout << "\nFederated training time: " << fed_time << " seconds" << endl;
