@@ -313,38 +313,51 @@ public:
         }
     }
 
-    void exportClusterAssignments(const string& output_dir = "./cluster_assignments") {
-        if (!filesystem::exists(output_dir)) {
-            filesystem::create_directories(output_dir);
-        }
+    void FederatedKMeans::exportClusterAssignments() {
+        if (file_to_data.empty()) {
+            std::cout << "Worker " << rank << " has no data to export." << std::endl;
+        } else {
+            std::cout << "Worker " << rank << " exporting " << file_to_data.size() << " files." << std::endl;
 
-        cout << "Worker " << rank << " preparing to export. File count: " << file_to_data.size() << endl;
+            for (const auto& entry : file_to_data) {
+                const std::string& input_path = entry.first;
+                const DataSet& dataset = entry.second;
 
-        for (const auto& [filepath, data] : file_to_data) {
-            cout << "Worker " << rank << " exporting file: " << filepath << ", points: " << data.size() << endl;
-            
-            string filename = filesystem::path(filepath).stem();
-            string out_path = output_dir + "/worker_" + to_string(rank) + "_" + filename + "_assignments.csv";
-
-            ofstream out(out_path);
-            if (!out.is_open()) {
-                cerr << "Worker " << rank << " failed to open " << out_path << " for writing." << endl;
-                continue;
-            }
-
-            for (const auto& point : data) {
-                for (size_t i = 0; i < point.features.size(); ++i) {
-                    out << point.features[i];
-                    if (i != point.features.size() - 1) {
-                        out << ",";
-                    }
+                // Construct output path
+                std::string output_path = input_path;
+                size_t pos = output_path.find("processed_data");
+                if (pos != std::string::npos) {
+                    output_path.replace(pos, std::string("processed_data").length(), "clustered_data");
+                } else {
+                    std::cerr << "Worker " << rank << ": Unexpected file path format: " << input_path << std::endl;
+                    continue;
                 }
-                out << "," << point.label << "\n";
-            }
 
-            out.close();
-            cout << "Worker " << rank << " finished writing: " << out_path << endl;
+                // Create output directory if it doesn't exist
+                fs::create_directories(fs::path(output_path).parent_path());
+
+                std::ofstream outfile(output_path);
+                if (!outfile.is_open()) {
+                    std::cerr << "Worker " << rank << ": Failed to open output file: " << output_path << std::endl;
+                    continue;
+                }
+
+                for (size_t i = 0; i < dataset.points.size(); ++i) {
+                    for (size_t j = 0; j < dataset.points[i].size(); ++j) {
+                        outfile << dataset.points[i][j];
+                        if (j < dataset.points[i].size() - 1) {
+                            outfile << ",";
+                        }
+                    }
+                    outfile << "," << dataset.cluster_assignments[i] << "\n";
+                }
+
+                outfile.close();
+            }
         }
+
+        // Make sure all processes reach here to avoid MPI hang
+        MPI_Barrier(MPI_COMM_WORLD);
     }
    
     bool fileToDataEmpty() const {
@@ -541,6 +554,10 @@ int main(int argc, char* argv[]) {
 
     if (!fed_kmeans.fileToDataEmpty()) {
         fed_kmeans.exportClusterAssignments();
+        cout << "\nExported cluster assignments." << endl;
+    }
+    else {
+        cout << "\nCould not export cluster assignments." << endl;
     }
     MPI_Barrier(MPI_COMM_WORLD);
     
