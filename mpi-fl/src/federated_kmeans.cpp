@@ -313,51 +313,82 @@ public:
         }
     }
 
-    void FederatedKMeans::exportClusterAssignments() {
-        if (file_to_data.empty()) {
-            std::cout << "Worker " << rank << " has no data to export." << std::endl;
-        } else {
-            std::cout << "Worker " << rank << " exporting " << file_to_data.size() << " files." << std::endl;
-
-            for (const auto& entry : file_to_data) {
-                const std::string& input_path = entry.first;
-                const DataSet& dataset = entry.second;
-
-                // Construct output path
-                std::string output_path = input_path;
-                size_t pos = output_path.find("processed_data");
-                if (pos != std::string::npos) {
-                    output_path.replace(pos, std::string("processed_data").length(), "clustered_data");
-                } else {
-                    std::cerr << "Worker " << rank << ": Unexpected file path format: " << input_path << std::endl;
-                    continue;
-                }
-
-                // Create output directory if it doesn't exist
-                fs::create_directories(fs::path(output_path).parent_path());
-
-                std::ofstream outfile(output_path);
-                if (!outfile.is_open()) {
-                    std::cerr << "Worker " << rank << ": Failed to open output file: " << output_path << std::endl;
-                    continue;
-                }
-
-                for (size_t i = 0; i < dataset.points.size(); ++i) {
-                    for (size_t j = 0; j < dataset.points[i].size(); ++j) {
-                        outfile << dataset.points[i][j];
-                        if (j < dataset.points[i].size() - 1) {
-                            outfile << ",";
-                        }
-                    }
-                    outfile << "," << dataset.cluster_assignments[i] << "\n";
-                }
-
-                outfile.close();
+    void exportClusterAssignments(const string& output_dir = "./cluster_assignments") {
+        // Only workers (rank > 0) should export data
+        if (rank == 0) {
+            cout << "Master process (rank 0) skipping export - no data to export." << endl;
+            return;
+        }
+        
+        // Create output directory if it doesn't exist
+        if (!filesystem::exists(output_dir)) {
+            try {
+                filesystem::create_directories(output_dir);
+                cout << "Worker " << rank << " created directory: " << output_dir << endl;
+            } catch (const filesystem::filesystem_error& e) {
+                cerr << "Worker " << rank << " failed to create directory " << output_dir << ": " << e.what() << endl;
+                return;
             }
         }
 
-        // Make sure all processes reach here to avoid MPI hang
-        MPI_Barrier(MPI_COMM_WORLD);
+        // Check if we have any data to export
+        if (file_to_data.empty()) {
+            cout << "Worker " << rank << " has no data to export." << endl;
+            return;
+        }
+
+        cout << "Worker " << rank << " preparing to export. File count: " << file_to_data.size() << endl;
+
+        for (const auto& [filepath, data] : file_to_data) {
+            if (data.empty()) {
+                cout << "Worker " << rank << " skipping empty dataset from: " << filepath << endl;
+                continue;
+            }
+            
+            cout << "Worker " << rank << " exporting file: " << filepath << ", points: " << data.size() << endl;
+            
+            // Extract just the filename without path and extension
+            string filename = filesystem::path(filepath).stem().string();
+            string out_path = output_dir + "/worker_" + to_string(rank) + "_" + filename + "_assignments.csv";
+
+            ofstream out(out_path);
+            if (!out.is_open()) {
+                cerr << "Worker " << rank << " failed to open " << out_path << " for writing." << endl;
+                continue;
+            }
+
+            // Write header (optional but helpful for debugging)
+            out << "# Features,Cluster_Assignment" << endl;
+            
+            // Check if points have been assigned to clusters
+            bool has_assignments = false;
+            for (const auto& point : data) {
+                if (point.label >= 0) {
+                    has_assignments = true;
+                    break;
+                }
+            }
+            
+            if (!has_assignments) {
+                cout << "Worker " << rank << " warning: No cluster assignments found for " << filepath << endl;
+            }
+
+            // Export each point with its features and cluster assignment
+            for (const auto& point : data) {
+                // Write features
+                for (size_t i = 0; i < point.features.size(); ++i) {
+                    out << fixed << setprecision(6) << point.features[i];
+                    if (i != point.features.size() - 1) {
+                        out << ",";
+                    }
+                }
+                // Write cluster assignment
+                out << "," << point.label << "\n";
+            }
+
+            out.close();
+            cout << "Worker " << rank << " successfully wrote " << data.size() << " points to: " << out_path << endl;
+        }
     }
    
     bool fileToDataEmpty() const {
@@ -552,17 +583,23 @@ int main(int argc, char* argv[]) {
     double fed_time = MPI_Wtime() - start_time;
     MPI_Barrier(MPI_COMM_WORLD);
 
-    if (!fed_kmeans.fileToDataEmpty()) {
-        fed_kmeans.exportClusterAssignments();
-        cout << "\nExported cluster assignments." << endl;
+    // Only workers should attempt to export (they have the data)
+    if (rank > 0) {
+        if (!fed_kmeans.fileToDataEmpty()) {
+            fed_kmeans.exportClusterAssignments();
+            cout << "Worker " << rank << " exported cluster assignments." << endl;
+        } else {
+            cout << "Worker " << rank << " has no data to export." << endl;
+        }
+    } else {
+        cout << "Master process completed coordination." << endl;
     }
-    else {
-        cout << "\nCould not export cluster assignments." << endl;
-    }
+
     MPI_Barrier(MPI_COMM_WORLD);
-    
+
     if (rank == 0) {
         cout << "\nFederated training time: " << fed_time << " seconds" << endl;
+        cout << "Check ./cluster_assignments/ directory for exported results." << endl;
     }
             
     // Centralized comparison
