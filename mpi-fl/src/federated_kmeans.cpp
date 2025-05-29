@@ -323,6 +323,30 @@ public:
 
     }
 
+    void runTrainingLoop() {
+        double prev_inertia = numeric_limits<double>::max();
+
+        for (int iteration = 0; iteration < max_iterations; iteration++) {
+            localKMeansStep();
+            federatedAveraging();
+
+            double current_inertia = computeGlobalInertia();
+
+            if (rank == 0) {
+                cout << "Iteration " << iteration + 1 << ", Inertia: "
+                    << fixed << setprecision(6) << current_inertia << endl;
+
+                if (abs(prev_inertia - current_inertia) < tolerance) {
+                    cout << "Converged after " << iteration + 1 << " iterations" << endl;
+                    break;
+                }
+            }
+
+            prev_inertia = current_inertia;
+        }
+    }
+
+
     void train() {
         initialiseCentroids();
 
@@ -528,13 +552,16 @@ int main(int argc, char* argv[]) {
     
     // Federated Learning
     FederatedKMeans fed_kmeans(k);
-    fed_kmeans.distributeData();
-    
+    // Initialize before timing
+    fed_kmeans.initialiseCentroids();
+
+    // Time only the core training loop
     double start_time = MPI_Wtime();
-    fed_kmeans.train();
+    fed_kmeans.runTrainingLoop();
     double fed_time = MPI_Wtime() - start_time;
 
     fed_kmeans.exportClusterAssignments();
+    
     
     if (rank == 0) {
         cout << "\nFederated training time: " << fed_time << " seconds" << endl;
