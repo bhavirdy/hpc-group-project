@@ -530,12 +530,15 @@ int main(int argc, char* argv[]) {
     // Federated Learning
     FederatedKMeans fed_kmeans(k);
     fed_kmeans.distributeData();
+    MPI_Barrier(MPI_COMM_WORLD);
 
     double start_time = MPI_Wtime();
     fed_kmeans.train();
     double fed_time = MPI_Wtime() - start_time;
+    MPI_Barrier(MPI_COMM_WORLD);
 
     fed_kmeans.exportClusterAssignments();
+    MPI_Barrier(MPI_COMM_WORLD);
     
     if (rank == 0) {
         cout << "\nFederated training time: " << fed_time << " seconds" << endl;
