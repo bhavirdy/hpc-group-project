@@ -302,6 +302,11 @@ public:
                 continue;
             }
 
+            if (file_to_data.empty()) {
+                cout << "Worker " << rank << " has no data to export." << endl;
+                return;
+            }
+
             for (const auto& point : data) {
                 for (size_t i = 0; i < point.features.size(); ++i) {
                     out << point.features[i];
