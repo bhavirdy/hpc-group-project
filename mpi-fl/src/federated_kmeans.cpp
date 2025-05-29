@@ -98,6 +98,7 @@ public:
                 }
             }
         }
+        cout << "Worker " << rank << " loaded " << file_to_data[filename].size() << " points from " << filename << endl;
     }
 
     void distributeData() {
