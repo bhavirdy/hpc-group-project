@@ -607,21 +607,21 @@ int main(int argc, char* argv[]) {
     }
             
     // Centralized comparison
-    if (rank == 0) {
-        cout << "\n=== Centralized K-Means ===" << endl;
-        CentralizedKMeans cent_kmeans(k);
-        cent_kmeans.loadData(centralized_file);
+    // if (rank == 0) {
+    //     cout << "\n=== Centralized K-Means ===" << endl;
+    //     CentralizedKMeans cent_kmeans(k);
+    //     cent_kmeans.loadData(centralized_file);
         
-        start_time = MPI_Wtime();
-        cent_kmeans.train();
-        double cent_time = MPI_Wtime() - start_time;
+    //     start_time = MPI_Wtime();
+    //     cent_kmeans.train();
+    //     double cent_time = MPI_Wtime() - start_time;
         
-        cout << "Centralized training time: " << cent_time << " seconds" << endl;
+    //     cout << "Centralized training time: " << cent_time << " seconds" << endl;
 
-        cout << "\n=== Performance Comparison ===" << endl;
-        cout << "Federated time: " << fed_time << "s" << endl;
-        cout << "Centralized time: " << cent_time << "s" << endl;
-    }
+    //     cout << "\n=== Performance Comparison ===" << endl;
+    //     cout << "Federated time: " << fed_time << "s" << endl;
+    //     cout << "Centralized time: " << cent_time << "s" << endl;
+    // }
     
     cout << "Process " << rank << " calling MPI_Finalize..." << endl;
     MPI_Finalize();
