@@ -10,8 +10,6 @@
 
 K_CLUSTERS=6
 
-echo "Running Centralised K-Means with $K_CLUSTERS clusters"
-
 # Run centralised training script
 ./cent_kmeans $K_CLUSTERS
 

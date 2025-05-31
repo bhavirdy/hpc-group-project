@@ -209,39 +209,6 @@ public:
         }
     }
 
-    void initializeCentroids() {
-        global_centroids.resize(k_clusters);
-        
-        if (rank == 0) {
-            // Master initializes centroids randomly
-            random_device rd;
-            mt19937 gen(rd());
-            uniform_real_distribution<double> dist(-50.0, 50.0);
-
-            for (int i = 0; i < k_clusters; i++) {
-                global_centroids[i] = Centroid(dimensions);
-                for (int j = 0; j < dimensions; j++) {
-                    global_centroids[i].center[j] = dist(gen);
-                }
-            }
-            
-            cout << "Initialized " << k_clusters << " centroids randomly" << endl;
-        } else {
-            // Workers initialize empty centroid structures
-            for (int i = 0; i < k_clusters; i++) {
-                global_centroids[i] = Centroid(dimensions);
-            }
-        }
-
-        broadcastCentroids();
-        
-        // Initialize local centroids
-        local_centroids.resize(k_clusters);
-        for (int i = 0; i < k_clusters; i++) {
-            local_centroids[i] = Centroid(dimensions);
-        }
-    }
-
     void initializeCentroidsKMeansPlusPlus(const string& full_training_file = "./data/uci_har/processed/train/X_train_pca.csv") {
         global_centroids.resize(k_clusters);
         
@@ -251,13 +218,10 @@ public:
             // Load all training data from the single file
             vector<Point> all_training_data;
             if (!full_training_file.empty() && loadDataFromFile(full_training_file, all_training_data)) {
-                cout << "Loaded " << all_training_data.size() << " points for K-means++ initialization from " << full_training_file << endl;
             } else {
                 return;
             }
-            
-            cout << "Initializing centroids using K-means++ with " << all_training_data.size() << " data points" << endl;
-            
+                        
             random_device rd;
             mt19937 gen(rd());
             
@@ -269,9 +233,7 @@ public:
             for (int j = 0; j < dimensions; j++) {
                 global_centroids[0].center[j] = all_training_data[first_centroid_idx].features[j];
             }
-            
-            cout << "Selected first centroid from point " << first_centroid_idx << endl;
-            
+                        
             // Step 2: Choose remaining centroids using K-means++ algorithm
             for (int c = 1; c < k_clusters; c++) {
                 vector<double> distances(all_training_data.size());
@@ -315,12 +277,8 @@ public:
                 for (int j = 0; j < dimensions; j++) {
                     global_centroids[c].center[j] = all_training_data[selected_idx].features[j];
                 }
-                
-                cout << "Selected centroid " << c << " from point " << selected_idx 
-                    << " (distance weight: " << fixed << setprecision(4) << distances[selected_idx] << ")" << endl;
             }
             
-            cout << "K-means++ initialization completed" << endl;
             
         } else {
             // Workers initialize empty centroid structures
@@ -482,8 +440,6 @@ public:
             double current_inertia = calculateGlobalInertia();
             
             if (rank == 0) {
-                cout << "Iteration " << (iteration + 1) 
-                     << ", Global Inertia: " << fixed << setprecision(6) << current_inertia << endl;
                 
                 if (abs(previous_inertia - current_inertia) < convergence_tolerance) {
                     cout << "Converged after " << (iteration + 1) << " iterations" << endl;
@@ -579,7 +535,7 @@ private:
             file << "\n";
         }
         
-        cout << "Exported centroids to ./fed_cluster_results/centroids.csv" << endl;
+        cout << "\nExported centroids to ./fed_cluster_results/centroids.csv" << endl;
     }
 
     void exportTestAssignments() {

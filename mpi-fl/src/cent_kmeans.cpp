@@ -75,8 +75,8 @@ public:
         
         if (!data.empty()) {
             dimensions = data[0].features.size();
-            cout << "Centralised: Loaded " << data.size() << " points with " 
-                     << dimensions << " dimensions" << endl;
+            cout << "Loaded " << data.size() << " training points " << endl; 
+
         }
     }
     
@@ -110,7 +110,7 @@ public:
             }
         }
         
-        cout << "Centralised: Loaded " << test_data.size() << " test points" << endl;
+        cout << "Loaded " << test_data.size() << " test points" << endl;
     }
     
     double euclideanDistance(const vector<double>& a, const vector<double>& b) {
@@ -134,9 +134,7 @@ public:
         uniform_int_distribution<int> uniform_dist(0, data.size() - 1);
         int first_index = uniform_dist(gen);
         centroids[0] = Centroid(data[first_index].features);
-        
-        cout << "K-means++: Selected first centroid from point " << first_index << endl;
-        
+                
         // Step 2: Choose remaining centroids using K-means++ method
         for (int c = 1; c < k; c++) {
             vector<double> distances(data.size());
@@ -175,12 +173,8 @@ public:
             }
             
             centroids[c] = Centroid(data[selected_index].features);
-            cout << "K-means++: Selected centroid " << c + 1 << " from point " 
-                << selected_index << " (distance weight: " << fixed << setprecision(4) 
-                << distances[selected_index] << ")" << endl;
         }
         
-        cout << "K-means++: Initialization complete with " << k << " centroids" << endl;
     }
 
     void train() {
@@ -236,9 +230,6 @@ public:
                 double dist = euclideanDistance(point.features, centroids[point.label].center);
                 inertia += dist * dist;
             }
-            
-            cout << "Centralised Iteration " << iteration + 1 << ", Inertia: " 
-                     << fixed << setprecision(6) << inertia << endl;
                         
             // Check for convergence
             if (abs(prev_inertia - inertia) < tolerance) {
