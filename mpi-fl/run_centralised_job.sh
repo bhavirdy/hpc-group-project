@@ -7,14 +7,14 @@
 #SBATCH --time=00:05:00
 #SBATCH --partition=stampede
 
-make
+echo "=== Job started on $(hostname) at $(date) ==="
+
+make || { echo "Make failed"; exit 1; }
 
 K_CLUSTERS=6
+./cent_kmeans $K_CLUSTERS || { echo "K-means failed"; exit 1; }
 
-# Run centralised training script
-./cent_kmeans $K_CLUSTERS
-
-echo ""
 echo "=== Calculating Metrics ==="
+python3 ./cent_cluster_assignments/metrics.py || { echo "Metrics script failed"; exit 1; }
 
-python3 ./cent_cluster_assignments/metrics.py
+echo "=== Job completed at $(date) ==="
