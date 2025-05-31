@@ -431,12 +431,12 @@ public:
         cout << "Assigned " << test_data.size() << " test points to clusters" << endl;
 
         // Display cluster distribution for test data
-        vector<int> cluster_counts(k, 0);
+        vector<int> cluster_counts(k_clusters, 0);
         for (const auto& point : test_data) {
             cluster_counts[point.cluster_label]++;
         }
         cout << "Test data cluster distribution:" << endl;
-        for (int i = 0; i < k; i++) {
+        for (int i = 0; i < k_clusters; i++) {
             cout << "Cluster " << i << ": " << cluster_counts[i] << " points" << endl;
         }
     }
