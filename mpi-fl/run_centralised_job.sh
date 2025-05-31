@@ -8,13 +8,14 @@
 #SBATCH --time=00:05:00
 #SBATCH --partition=stampede
 
-K_CLUSTERS=2
+K_CLUSTERS=6
 
 echo "Running Centralised K-Means with $K_CLUSTERS clusters"
 
 # Run centralised training script
 ./cent_kmeans $K_CLUSTERS
 
-echo "Calculating Metrics"
+echo ""
+echo "=== Calculating Metrics ==="
 
 python3 ./cent_cluster_assignments/metrics.py

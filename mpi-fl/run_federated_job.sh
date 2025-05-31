@@ -10,12 +10,13 @@
 #SBATCH --nodes=1-40             # Allow up to 40 nodes, depending on $1
 
 NUM_PROCS=$1
-K_CLUSTERS=2
+K_CLUSTERS=6
 
 echo "Running Federated K-Means with $NUM_PROCS processes and $K_CLUSTERS clusters"
 
 mpirun -np $NUM_PROCS ./fed_kmeans $K_CLUSTERS
 
-echo "Calculating Metrics"
+echo ""
+echo "=== Calculating Metrics ==="
 
 python3 ./fed_cluster_assignments/metrics.py
