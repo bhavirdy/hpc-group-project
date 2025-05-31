@@ -4,10 +4,8 @@
 #SBATCH --error=logs/centralised.err
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=2GB
 #SBATCH --time=00:05:00
 #SBATCH --partition=stampede
-
 
 make
 
