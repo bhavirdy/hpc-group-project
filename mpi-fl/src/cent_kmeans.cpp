@@ -6,7 +6,6 @@
 #include <filesystem>
 #include <chrono>
 #include <iomanip>
-#include <bits/stdc++.h>
 
 using namespace std;
 
