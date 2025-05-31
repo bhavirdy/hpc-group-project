@@ -4,6 +4,7 @@
 #include <iostream>
 #include <fstream>
 #include <filesystem>
+#include <chrono>
 
 using namespace std;
 
@@ -24,7 +25,6 @@ struct Centroid {
     Centroid(const vector<double>& c) : center(c), count(0) {}
 };
 
-
 class CentralisedKMeans {
 private:
     int k;
@@ -38,7 +38,7 @@ public:
     CentralisedKMeans(int k_clusters, int max_iter = 100, double tol = 1e-6) 
                       : k(k_clusters), max_iterations(max_iter), tolerance(tol) {}
     
-    void loadData(const string& filename) {
+    void loadData(const string& filename = "./data/uci_har/processed_data/split_data") {
         ifstream file(filename);
         if (!file.is_open()) {
             cout << "Could not open " << filename << " for centralised comparison" << endl;
@@ -169,7 +169,16 @@ int main(int argc, char* argv[]) {
     
     int k = stoi(argv[1]);
     
+    cout << "\n=== Centralised K-Means (Baseline) ===" << endl;
+    CentralisedKMeans cent_kmeans(k);
+    cent_kmeans.loadData();
     
+    auto start = chrono::high_resolution_clock::now();
+    cent_kmeans.train();
+    auto end = chrono::high_resolution_clock::now();
+    chrono::duration<double> elapsed = end - start;
+    
+    cout << "Centralised training time: " << elapsed.count() << " seconds" << endl;
 
     return 0;
 }

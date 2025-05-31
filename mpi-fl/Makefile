@@ -1,18 +1,23 @@
-# Makefile for Federated K-Means Clustering
-CXX = mpicxx
+# Compiler settings
+MPICXX = mpicxx
+CXX = g++
 CXXFLAGS = -std=c++17 -O3 -Wall -Wextra
-TARGET = federated_kmeans
-SOURCES = src/federated_kmeans.cpp
 
-# Default target
-all: $(TARGET)
+# Targets
+FED_TARGET = fed_kmeans
+CENT_TARGET = cent_kmeans
 
-# Build the main executable
-$(TARGET): $(SOURCES)
-	$(CXX) $(CXXFLAGS) -o $(TARGET) $(SOURCES)
+# Sources
+FED_SRC = src/fed_kmeans.cpp
+CENT_SRC = src/cent_kmeans.cpp
 
-# Clean build artifacts
+all: $(FED_TARGET) $(CENT_TARGET)
+
+$(FED_TARGET): $(FED_SRC)
+	$(MPICXX) $(CXXFLAGS) -o $@ $^
+
+$(CENT_TARGET): $(CENT_SRC)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
 clean:
-	rm -f $(TARGET) *.o
-
-.PHONY: all clean
+	rm -f $(FED_TARGET) $(CENT_TARGET) *.o
