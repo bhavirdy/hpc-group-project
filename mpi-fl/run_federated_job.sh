@@ -4,7 +4,6 @@
 #SBATCH --error=logs/fed_workers_$1.err
 #SBATCH --ntasks=$1              # Total number of MPI processes
 #SBATCH --cpus-per-task=1        # One CPU per MPI process
-#SBATCH --mem=2G
 #SBATCH --time=00:05:00
 #SBATCH --partition=stampede
 #SBATCH --nodes=1-40             # Allow up to 40 nodes, depending on $1
