@@ -50,6 +50,7 @@ public:
         }
         
         string line;
+        getline(file, line);
         
         while (getline(file, line)) {
             if (line.empty()) continue;
@@ -86,6 +87,7 @@ public:
         }
         
         string line;
+        getline(file, line);
         
         while (getline(file, line)) {
             if (line.empty()) continue;
@@ -137,10 +139,8 @@ public:
         
         double prev_inertia = numeric_limits<double>::max();
         bool converged = false;
-        int final_iteration = 0;
         
         for (int iteration = 0; iteration < max_iterations; iteration++) {
-            final_iteration = iteration;
             
             // Assignment step
             for (auto& point : data) {

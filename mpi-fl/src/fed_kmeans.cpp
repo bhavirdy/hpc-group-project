@@ -76,6 +76,7 @@ public:
         }
 
         string line;
+        getline(file, line);
         while (getline(file, line)) {
             if (line.empty()) continue;
 
@@ -114,6 +115,8 @@ public:
         }
 
         string line;
+        getline(file, line);
+
         while (getline(file, line)) {
             if (line.empty()) continue;
 
