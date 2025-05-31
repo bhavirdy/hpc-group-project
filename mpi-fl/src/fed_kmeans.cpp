@@ -186,16 +186,17 @@ public:
 
     void initialiseCentroids() {
         if (rank == 0) {
+            // Initialize centroids from data
             random_device rd;
             mt19937 gen(rd());
-            uniform_real_distribution<> dis(-50.0, 50.0);
 
-            global_centroids.resize(k);
+            vector<int> indices(data.size());
+            iota(indices.begin(), indices.end(), 0);
+            shuffle(indices.begin(), indices.end(), gen);
+
+            centroids.resize(k);
             for (int i = 0; i < k; i++) {
-                global_centroids[i].center.resize(dimensions);
-                for (int j = 0; j < dimensions; j++) {
-                    global_centroids[i].center[j] = dis(gen);
-                }
+                centroids[i] = Centroid(data[indices[i]].features);
             }
         } else {
             // Workers need to initialise their global_centroids structure
