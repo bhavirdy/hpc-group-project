@@ -242,6 +242,103 @@ public:
         }
     }
 
+    void initializeCentroidsKMeansPlusPlus(const string& full_training_file = "./data/uci_har/processed/test/X_train_pca.csv") {
+        global_centroids.resize(k_clusters);
+        
+        if (rank == 0) {
+            // Master performs K-means++ initialization
+            
+            // Load all training data from the single file
+            vector<Point> all_training_data;
+            if (!full_training_file.empty() && loadDataFromFile(full_training_file, all_training_data)) {
+                cout << "Loaded " << all_training_data.size() << " points for K-means++ initialization from " << full_training_file << endl;
+            } else {
+                return;
+            }
+            
+            cout << "Initializing centroids using K-means++ with " << all_training_data.size() << " data points" << endl;
+            
+            random_device rd;
+            mt19937 gen(rd());
+            
+            // Step 1: Choose first centroid randomly
+            uniform_int_distribution<int> point_dist(0, all_training_data.size() - 1);
+            int first_centroid_idx = point_dist(gen);
+            
+            global_centroids[0] = Centroid(dimensions);
+            for (int j = 0; j < dimensions; j++) {
+                global_centroids[0].center[j] = all_training_data[first_centroid_idx].features[j];
+            }
+            
+            cout << "Selected first centroid from point " << first_centroid_idx << endl;
+            
+            // Step 2: Choose remaining centroids using K-means++ algorithm
+            for (int c = 1; c < k_clusters; c++) {
+                vector<double> distances(all_training_data.size());
+                double total_distance = 0.0;
+                
+                // Calculate squared distance from each point to nearest existing centroid
+                for (size_t i = 0; i < all_training_data.size(); i++) {
+                    double min_dist_sq = numeric_limits<double>::max();
+                    
+                    // Find distance to nearest existing centroid
+                    for (int existing_c = 0; existing_c < c; existing_c++) {
+                        double dist = calculateDistance(all_training_data[i].features, 
+                                                    global_centroids[existing_c].center);
+                        double dist_sq = dist * dist;
+                        if (dist_sq < min_dist_sq) {
+                            min_dist_sq = dist_sq;
+                        }
+                    }
+                    
+                    distances[i] = min_dist_sq;
+                    total_distance += min_dist_sq;
+                }
+                
+                // Choose next centroid with probability proportional to squared distance
+                uniform_real_distribution<double> prob_dist(0.0, total_distance);
+                double target_distance = prob_dist(gen);
+                
+                double cumulative_distance = 0.0;
+                int selected_idx = 0;
+                
+                for (size_t i = 0; i < all_training_data.size(); i++) {
+                    cumulative_distance += distances[i];
+                    if (cumulative_distance >= target_distance) {
+                        selected_idx = i;
+                        break;
+                    }
+                }
+                
+                // Set the new centroid
+                global_centroids[c] = Centroid(dimensions);
+                for (int j = 0; j < dimensions; j++) {
+                    global_centroids[c].center[j] = all_training_data[selected_idx].features[j];
+                }
+                
+                cout << "Selected centroid " << c << " from point " << selected_idx 
+                    << " (distance weight: " << fixed << setprecision(4) << distances[selected_idx] << ")" << endl;
+            }
+            
+            cout << "K-means++ initialization completed" << endl;
+            
+        } else {
+            // Workers initialize empty centroid structures
+            for (int i = 0; i < k_clusters; i++) {
+                global_centroids[i] = Centroid(dimensions);
+            }
+        }
+
+        // Broadcast initialized centroids to all processes
+        broadcastCentroids();
+        
+        // Initialize local centroids
+        local_centroids.resize(k_clusters);
+        for (int i = 0; i < k_clusters; i++) {
+            local_centroids[i] = Centroid(dimensions);
+        }
+    }
+
     void broadcastCentroids() {
         // Broadcast centroids from master to all processes
         for (int i = 0; i < k_clusters; i++) {
@@ -369,7 +466,7 @@ public:
             cout << "Process " << rank << " starting training with " << local_data.size() << " data points" << endl;
         }
         
-        initializeCentroids();
+        initializeCentroidsKMeansPlusPlus();
         
         double previous_inertia = numeric_limits<double>::max();
         bool has_converged = false;
@@ -529,8 +626,8 @@ int main(int argc, char* argv[]) {
         // Parse command line arguments
         if (argc < 2) {
             if (rank == 0) {
-                cout << "Usage: " << argv[0] << " <k_clusters> [max_iterations] [tolerance]" << endl;
-                cout << "Example: " << argv[0] << " 6 100 1e-6" << endl;
+                cout << "Usage: " << argv[0] << " <k_clusters>" << endl;
+                cout << "Example: " << argv[0] << " 6 " << endl;
             }
             MPI_Finalize();
             return 1;

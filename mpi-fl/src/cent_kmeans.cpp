@@ -122,21 +122,71 @@ public:
         return sqrt(sum);
     }
     
+    void initializeCentroidsKMeansPlusPlus() {
+        if (data.empty()) return;
+        
+        random_device rd;
+        mt19937 gen(rd());
+        
+        centroids.resize(k);
+        
+        // Step 1: Choose first centroid randomly
+        uniform_int_distribution<int> uniform_dist(0, data.size() - 1);
+        int first_index = uniform_dist(gen);
+        centroids[0] = Centroid(data[first_index].features);
+        
+        cout << "K-means++: Selected first centroid from point " << first_index << endl;
+        
+        // Step 2: Choose remaining centroids using K-means++ method
+        for (int c = 1; c < k; c++) {
+            vector<double> distances(data.size());
+            double total_distance = 0.0;
+            
+            // Calculate squared distance from each point to nearest existing centroid
+            for (int i = 0; i < data.size(); i++) {
+                double min_dist_sq = numeric_limits<double>::max();
+                
+                // Find distance to nearest centroid
+                for (int j = 0; j < c; j++) {
+                    double dist = euclideanDistance(data[i].features, centroids[j].center);
+                    double dist_sq = dist * dist;
+                    if (dist_sq < min_dist_sq) {
+                        min_dist_sq = dist_sq;
+                    }
+                }
+                
+                distances[i] = min_dist_sq;
+                total_distance += min_dist_sq;
+            }
+            
+            // Choose next centroid with probability proportional to squared distance
+            uniform_real_distribution<double> real_dist(0.0, total_distance);
+            double random_value = real_dist(gen);
+            
+            double cumulative_distance = 0.0;
+            int selected_index = 0;
+            
+            for (int i = 0; i < data.size(); i++) {
+                cumulative_distance += distances[i];
+                if (cumulative_distance >= random_value) {
+                    selected_index = i;
+                    break;
+                }
+            }
+            
+            centroids[c] = Centroid(data[selected_index].features);
+            cout << "K-means++: Selected centroid " << c + 1 << " from point " 
+                << selected_index << " (distance weight: " << fixed << setprecision(4) 
+                << distances[selected_index] << ")" << endl;
+        }
+        
+        cout << "K-means++: Initialization complete with " << k << " centroids" << endl;
+    }
+
     void train() {
         if (data.empty()) return;
         
-        // Initialize centroids from data
-        random_device rd;
-        mt19937 gen(rd());
-
-        vector<int> indices(data.size());
-        iota(indices.begin(), indices.end(), 0);
-        shuffle(indices.begin(), indices.end(), gen);
-
-        centroids.resize(k);
-        for (int i = 0; i < k; i++) {
-            centroids[i] = Centroid(data[indices[i]].features);
-        }
+        initializeCentroidsKMeansPlusPlus();
         
         double prev_inertia = numeric_limits<double>::max();
         bool converged = false;
