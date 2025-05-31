@@ -1,8 +1,8 @@
 #!/bin/bash
-#SBATCH --job-name=fed_workers_$1
-#SBATCH --output=logs/fed_workers_$1.out
-#SBATCH --error=logs/fed_workers_$1.err
-#SBATCH --ntasks=$1              # Total number of MPI processes
+#SBATCH --job-name=fed_workers
+#SBATCH --output=logs/fed_workers.out
+#SBATCH --error=logs/fed_workers.err
+
 #SBATCH --cpus-per-task=1        # One CPU per MPI process
 #SBATCH --time=00:05:00
 #SBATCH --partition=stampede
