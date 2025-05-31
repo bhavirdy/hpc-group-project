@@ -297,12 +297,23 @@ public:
         }
         
         // Write header
-        file << "point_id,cluster_assignment\n";
-        
-        // Write assignments
-        for (size_t i = 0; i < test_data.size(); i++) {
-            file << i << "," << test_data[i].label << "\n";
+        file << "point_index,cluster_assignment";
+        for (int j = 0; j < dimensions; j++) {
+            file << ",feature_" << j;
         }
+        file << "\n";
+
+        // Write test point assignments
+        for (int i = 0; i < test_data.size(); i++) {
+            const auto& point = test_data[i];
+            file << i << "," << point.label;
+            for (int j = 0; j < dimensions; j++) {
+                file << "," << fixed << setprecision(6) << point.features[j];
+            }
+            file << "\n";
+        }
+        
+        file.close();
         
         file.close();
         cout << "Test assignments exported to: " << filepath << endl;

@@ -404,22 +404,10 @@ public:
         double prev_inertia = numeric_limits<double>::max();
         bool converged = false;
         
-        for (int iteration = 0; iteration < max_iterations; iteration++) {
-            if (rank == 0) {
-                cout << "Starting iteration " << (iteration + 1) << "..." << endl;
-            }
-            
+        for (int iteration = 0; iteration < max_iterations; iteration++) {        
             localKMeansStep();
-            
-            if (rank == 0) {
-                cout << "Local K-means step complete, starting federated averaging..." << endl;
-            }
-            
+    
             federatedAveraging();
-            
-            if (rank == 0) {
-                cout << "Federated averaging complete, computing inertia..." << endl;
-            }
             
             double current_inertia = computeGlobalInertia();
             
@@ -440,11 +428,7 @@ public:
             MPI_Bcast(&converged_flag, 1, MPI_INT, 0, MPI_COMM_WORLD);
             converged = (converged_flag == 1);
             
-            // All processes must make the same decision about breaking
             if (converged) {
-                if (rank == 0) {
-                    cout << "All processes breaking from training loop." << endl;
-                }
                 break;
             }
         }
