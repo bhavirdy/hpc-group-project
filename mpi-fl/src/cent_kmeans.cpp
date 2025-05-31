@@ -108,10 +108,10 @@ public:
                       : k(k_clusters), max_iterations(max_iter), tolerance(tol), 
                         export_dir("cent_cluster_assignments") {}
     
-    void loadData(const string& filename = "./data/uci_har/processed_data/split_data") {
+    void loadData(const string& filename = "./data/uci_har/processed/train/X_train_pca.csv") {
         ifstream file(filename);
         if (!file.is_open()) {
-            cout << "Could not open " << filename << " for centralised comparison" << endl;
+            cout << "Could not open " << filename << endl;
             return;
         }
         
