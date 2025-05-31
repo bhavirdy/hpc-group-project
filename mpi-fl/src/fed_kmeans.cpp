@@ -539,7 +539,7 @@ private:
     }
 
     void exportTestAssignments() {
-        ofstream file("./fed_cluster_results/test_assignments.csv");
+        ofstream file("./fed_cluster_assignments/test_assignments.csv");
         if (!file.is_open()) {
             cout << "Failed to create test assignments file" << endl;
             return;
@@ -574,11 +574,6 @@ int main(int argc, char* argv[]) {
     MPI_Comm_size(MPI_COMM_WORLD, &size);
 
     try {
-        // Display node information
-        char hostname[HOST_NAME_MAX];
-        gethostname(hostname, HOST_NAME_MAX);
-        cout << "Process " << rank << " running on " << hostname << endl;
-        
         // Parse command line arguments
         if (argc < 2) {
             if (rank == 0) {
@@ -592,15 +587,6 @@ int main(int argc, char* argv[]) {
         int k = stoi(argv[1]);
         int max_iter = (argc > 2) ? stoi(argv[2]) : 100;
         double tolerance = (argc > 3) ? stod(argv[3]) : 1e-6;
-        
-        if (rank == 0) {
-            cout << "\n=== Federated K-Means Configuration ===" << endl;
-            cout << "Processes: " << size << " (1 master + " << (size-1) << " workers)" << endl;
-            cout << "Clusters (k): " << k << endl;
-            cout << "Max iterations: " << max_iter << endl;
-            cout << "Convergence tolerance: " << tolerance << endl;
-            cout << "=========================================\n" << endl;
-        }
         
         // Create and run federated K-means
         FederatedKMeans fed_kmeans(k, max_iter, tolerance);
