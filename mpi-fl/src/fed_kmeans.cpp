@@ -343,12 +343,6 @@ public:
     }
 
     void exportClusterAssignments(const string& output_dir = "./cluster_assignments") {
-        // Only workers (rank > 0) should export data
-        if (rank == 0) {
-            cout << "Master process (rank 0) skipping export - no data to export." << endl;
-            return;
-        }
-        
         // Create output directory if it doesn't exist
         if (!filesystem::exists(output_dir)) {
             try {
@@ -386,7 +380,7 @@ public:
                 continue;
             }
 
-            // Write header (optional but helpful for debugging)
+            // Write header
             out << "# Features,Cluster_Assignment" << endl;
             
             // Check if points have been assigned to clusters

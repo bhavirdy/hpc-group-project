@@ -5,6 +5,7 @@
 #include <fstream>
 #include <filesystem>
 #include <chrono>
+#include <iomanip>
 
 using namespace std;
 
@@ -33,10 +34,79 @@ private:
     double tolerance;
     vector<Point> data;
     vector<Centroid> centroids;
+    string export_dir;
     
+    void createExportDirectory() {
+        try {
+            filesystem::create_directories(export_dir);
+            cout << "Created export directory: " << export_dir << endl;
+        } catch (const filesystem::filesystem_error& e) {
+            cerr << "Error creating directory " << export_dir << ": " << e.what() << endl;
+        }
+    }
+    
+    void exportClusterAssignments(int iteration) {
+        string filename = export_dir + "/assignments_round_" + to_string(iteration + 1) + ".csv";
+        ofstream file(filename);
+        
+        if (!file.is_open()) {
+            cerr << "Could not create assignments file: " << filename << endl;
+            return;
+        }
+        
+        // Write header
+        file << "point_id,cluster_id";
+        for (int i = 0; i < dimensions; i++) {
+            file << ",feature_" << i;
+        }
+        file << endl;
+        
+        // Write data
+        for (size_t i = 0; i < data.size(); i++) {
+            file << i << "," << data[i].label;
+            for (int j = 0; j < dimensions; j++) {
+                file << "," << fixed << setprecision(8) << data[i].features[j];
+            }
+            file << endl;
+        }
+        
+        file.close();
+        cout << "Exported cluster assignments to: " << filename << endl;
+    }
+    
+    void exportCentroids(int iteration) {
+        string filename = export_dir + "/centroids_round_" + to_string(iteration + 1) + ".csv";
+        ofstream file(filename);
+        
+        if (!file.is_open()) {
+            cerr << "Could not create centroids file: " << filename << endl;
+            return;
+        }
+        
+        // Write header
+        file << "centroid_id,count";
+        for (int i = 0; i < dimensions; i++) {
+            file << ",center_" << i;
+        }
+        file << endl;
+        
+        // Write centroids
+        for (int i = 0; i < k; i++) {
+            file << i << "," << centroids[i].count;
+            for (int j = 0; j < dimensions; j++) {
+                file << "," << fixed << setprecision(8) << centroids[i].center[j];
+            }
+            file << endl;
+        }
+        
+        file.close();
+        cout << "Exported centroids to: " << filename << endl;
+    }
+       
 public:
     CentralisedKMeans(int k_clusters, int max_iter = 100, double tol = 1e-6) 
-                      : k(k_clusters), max_iterations(max_iter), tolerance(tol) {}
+                      : k(k_clusters), max_iterations(max_iter), tolerance(tol), 
+                        export_dir("cent_cluster_assignments") {}
     
     void loadData(const string& filename = "./data/uci_har/processed_data/split_data") {
         ifstream file(filename);
@@ -86,6 +156,9 @@ public:
     void train() {
         if (data.empty()) return;
         
+        // Create export directory
+        createExportDirectory();
+        
         // Initialize centroids randomly
         random_device rd;
         mt19937 gen(rd());
@@ -100,8 +173,12 @@ public:
         }
         
         double prev_inertia = numeric_limits<double>::max();
+        bool converged = false;
+        int final_iteration = 0;
         
         for (int iteration = 0; iteration < max_iterations; iteration++) {
+            final_iteration = iteration;
+            
             // Assignment step
             for (auto& point : data) {
                 double min_dist = numeric_limits<double>::max();
@@ -148,14 +225,20 @@ public:
             
             cout << "Centralised Iteration " << iteration + 1 << ", Inertia: " 
                      << fixed << setprecision(6) << inertia << endl;
-            
+                        
+            // Check for convergence
             if (abs(prev_inertia - inertia) < tolerance) {
                 cout << "Centralised converged after " << iteration + 1 << " iterations" << endl;
+                converged = true;
                 break;
             }
             
             prev_inertia = inertia;
         }
+        
+        // Export final results only
+        exportClusterAssignments(final_iteration);
+        exportCentroids(final_iteration);
     }
 };
 
