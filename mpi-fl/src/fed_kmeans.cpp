@@ -242,7 +242,7 @@ public:
         }
     }
 
-    void initializeCentroidsKMeansPlusPlus(const string& full_training_file = "./data/uci_har/processed/test/X_train_pca.csv") {
+    void initializeCentroidsKMeansPlusPlus(const string& full_training_file = "./data/uci_har/processed/train/X_train_pca.csv") {
         global_centroids.resize(k_clusters);
         
         if (rank == 0) {
