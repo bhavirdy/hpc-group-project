@@ -328,9 +328,6 @@ public:
                     for (int j = 0; j < dimensions; j++) {
                         global_centroids[i].center[j] = aggregated_centroids[i].center[j] / total_point_counts[i];
                     }
-                } else {
-                    // Keep previous centroid if no points assigned
-                    cout << "Warning: Cluster " << i << " has no assigned points" << endl;
                 }
             }
 
@@ -368,7 +365,9 @@ public:
     }
 
     void train() {
-        cout << "Process " << rank << " starting training with " << local_data.size() << " data points" << endl;
+        if (rank > 0) {
+            cout << "Process " << rank << " starting training with " << local_data.size() << " data points" << endl;
+        }
         
         initializeCentroids();
         
@@ -430,6 +429,16 @@ public:
         }
 
         cout << "Assigned " << test_data.size() << " test points to clusters" << endl;
+
+        // Display cluster distribution for test data
+        vector<int> cluster_counts(k, 0);
+        for (const auto& point : test_data) {
+            cluster_counts[point.cluster_label]++;
+        }
+        cout << "Test data cluster distribution:" << endl;
+        for (int i = 0; i < k; i++) {
+            cout << "Cluster " << i << ": " << cluster_counts[i] << " points" << endl;
+        }
     }
 
     void exportResults() {
