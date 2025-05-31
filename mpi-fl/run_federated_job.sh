@@ -9,6 +9,8 @@
 #SBATCH --partition=stampede
 #SBATCH --nodes=1-40             # Allow up to 40 nodes, depending on $1
 
+make
+
 NUM_PROCS=$1
 K_CLUSTERS=6
 

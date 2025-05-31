@@ -8,6 +8,9 @@
 #SBATCH --time=00:05:00
 #SBATCH --partition=stampede
 
+
+make
+
 K_CLUSTERS=6
 
 # Run centralised training script
