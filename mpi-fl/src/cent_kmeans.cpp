@@ -33,76 +33,10 @@ private:
     int max_iterations;
     double tolerance;
     vector<Point> data;
+    vector<Point> test_data;
     vector<Centroid> centroids;
     string export_dir;
-    
-    void createExportDirectory() {
-        try {
-            filesystem::create_directories(export_dir);
-            cout << "Created export directory: " << export_dir << endl;
-        } catch (const filesystem::filesystem_error& e) {
-            cerr << "Error creating directory " << export_dir << ": " << e.what() << endl;
-        }
-    }
-    
-    void exportClusterAssignments(int iteration) {
-        string filename = export_dir + "/assignments_round_" + to_string(iteration + 1) + ".csv";
-        ofstream file(filename);
-        
-        if (!file.is_open()) {
-            cerr << "Could not create assignments file: " << filename << endl;
-            return;
-        }
-        
-        // Write header
-        file << "point_id,cluster_id";
-        for (int i = 0; i < dimensions; i++) {
-            file << ",feature_" << i;
-        }
-        file << endl;
-        
-        // Write data
-        for (size_t i = 0; i < data.size(); i++) {
-            file << i << "," << data[i].label;
-            for (int j = 0; j < dimensions; j++) {
-                file << "," << fixed << setprecision(8) << data[i].features[j];
-            }
-            file << endl;
-        }
-        
-        file.close();
-        cout << "Exported cluster assignments to: " << filename << endl;
-    }
-    
-    void exportCentroids(int iteration) {
-        string filename = export_dir + "/centroids_round_" + to_string(iteration + 1) + ".csv";
-        ofstream file(filename);
-        
-        if (!file.is_open()) {
-            cerr << "Could not create centroids file: " << filename << endl;
-            return;
-        }
-        
-        // Write header
-        file << "centroid_id,count";
-        for (int i = 0; i < dimensions; i++) {
-            file << ",center_" << i;
-        }
-        file << endl;
-        
-        // Write centroids
-        for (int i = 0; i < k; i++) {
-            file << i << "," << centroids[i].count;
-            for (int j = 0; j < dimensions; j++) {
-                file << "," << fixed << setprecision(8) << centroids[i].center[j];
-            }
-            file << endl;
-        }
-        
-        file.close();
-        cout << "Exported centroids to: " << filename << endl;
-    }
-       
+  
 public:
     CentralisedKMeans(int k_clusters, int max_iter = 100, double tol = 1e-6) 
                       : k(k_clusters), max_iterations(max_iter), tolerance(tol), 
@@ -144,6 +78,38 @@ public:
         }
     }
     
+    void loadTestData(const string& filename = "./data/uci_har/processed/test/X_test_pca.csv") {
+        ifstream file(filename);
+        if (!file.is_open()) {
+            cout << "Could not open test file " << filename << endl;
+            return;
+        }
+        
+        string line;
+        
+        while (getline(file, line)) {
+            if (line.empty()) continue;
+            
+            istringstream iss(line);
+            vector<double> features;
+            string value;
+            
+            while (getline(iss, value, ',')) {
+                try {
+                    features.push_back(stod(value));
+                } catch (...) {
+                    continue;
+                }
+            }
+            
+            if (!features.empty()) {
+                test_data.push_back(Point(features));
+            }
+        }
+        
+        cout << "Centralised: Loaded " << test_data.size() << " test points" << endl;
+    }
+    
     double euclideanDistance(const vector<double>& a, const vector<double>& b) {
         double sum = 0.0;
         for (size_t i = 0; i < a.size(); i++) {
@@ -155,9 +121,6 @@ public:
     
     void train() {
         if (data.empty()) return;
-        
-        // Create export directory
-        createExportDirectory();
         
         // Initialize centroids randomly
         random_device rd;
@@ -235,10 +198,122 @@ public:
             
             prev_inertia = inertia;
         }
+    }
+    
+    void test() {
+        if (test_data.empty() || centroids.empty()) {
+            cout << "No test data or centroids available for testing" << endl;
+            return;
+        }
         
-        // Export final results only
-        exportClusterAssignments(final_iteration);
-        exportCentroids(final_iteration);
+        cout << "\n=== Testing on Test Data ===" << endl;
+        
+        // Assign test points to clusters
+        for (auto& point : test_data) {
+            double min_dist = numeric_limits<double>::max();
+            int best_cluster = 0;
+            
+            for (int i = 0; i < k; i++) {
+                double dist = euclideanDistance(point.features, centroids[i].center);
+                if (dist < min_dist) {
+                    min_dist = dist;
+                    best_cluster = i;
+                }
+            }
+            point.label = best_cluster;
+        }
+        
+        // Compute test inertia
+        double test_inertia = 0.0;
+        for (const auto& point : test_data) {
+            double dist = euclideanDistance(point.features, centroids[point.label].center);
+            test_inertia += dist * dist;
+        }
+        
+        cout << "Test inertia: " << fixed << setprecision(6) << test_inertia << endl;
+        
+        // Display cluster distribution for test data
+        vector<int> cluster_counts(k, 0);
+        for (const auto& point : test_data) {
+            cluster_counts[point.label]++;
+        }
+        
+        cout << "Test data cluster distribution:" << endl;
+        for (int i = 0; i < k; i++) {
+            cout << "Cluster " << i << ": " << cluster_counts[i] << " points" << endl;
+        }
+    }
+    
+    void exportCentroids(const string& filename = "final_centroids.csv") {
+        if (centroids.empty()) {
+            cout << "No centroids to export" << endl;
+            return;
+        }
+        
+        // Create export directory if it doesn't exist
+        filesystem::create_directories(export_dir);
+        string filepath = export_dir + "/" + filename;
+        
+        ofstream file(filepath);
+        if (!file.is_open()) {
+            cout << "Could not create centroids file: " << filepath << endl;
+            return;
+        }
+        
+        // Write header
+        file << "cluster_id";
+        for (int j = 0; j < dimensions; j++) {
+            file << ",feature_" << j;
+        }
+        file << "\n";
+        
+        // Write centroids
+        for (int i = 0; i < k; i++) {
+            file << i;
+            for (int j = 0; j < dimensions; j++) {
+                file << "," << fixed << setprecision(8) << centroids[i].center[j];
+            }
+            file << "\n";
+        }
+        
+        file.close();
+        cout << "Centroids exported to: " << filepath << endl;
+    }
+    
+    void exportTestAssignments(const string& filename = "test_assignments.csv") {
+        if (test_data.empty()) {
+            cout << "No test data to export" << endl;
+            return;
+        }
+        
+        // Create export directory if it doesn't exist
+        filesystem::create_directories(export_dir);
+        string filepath = export_dir + "/" + filename;
+        
+        ofstream file(filepath);
+        if (!file.is_open()) {
+            cout << "Could not create test assignments file: " << filepath << endl;
+            return;
+        }
+        
+        // Write header
+        file << "point_id,cluster_assignment\n";
+        
+        // Write assignments
+        for (size_t i = 0; i < test_data.size(); i++) {
+            file << i << "," << test_data[i].label << "\n";
+        }
+        
+        file.close();
+        cout << "Test assignments exported to: " << filepath << endl;
+    }
+    
+    void exportAll() {
+        cout << "\n=== Exporting Results ===" << endl;
+        exportCentroids();
+        if (!test_data.empty()) {
+            exportTestAssignments();
+        }
     }
 };
 
@@ -254,14 +329,26 @@ int main(int argc, char* argv[]) {
     
     cout << "\n=== Centralised K-Means (Baseline) ===" << endl;
     CentralisedKMeans cent_kmeans(k);
+    
+    // Load training data
     cent_kmeans.loadData();
     
+    // Load test data
+    cent_kmeans.loadTestData();
+    
+    // Train the model
     auto start = chrono::high_resolution_clock::now();
     cent_kmeans.train();
     auto end = chrono::high_resolution_clock::now();
     chrono::duration<double> elapsed = end - start;
     
     cout << "Centralised training time: " << elapsed.count() << " seconds" << endl;
+    
+    // Test the model
+    cent_kmeans.test();
+    
+    // Export all results
+    cent_kmeans.exportAll();
 
     return 0;
 }

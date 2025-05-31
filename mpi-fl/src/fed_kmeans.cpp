@@ -10,15 +10,17 @@
 #include <cmath>
 #include <iomanip>
 #include <map>
+#include <filesystem>
 
 using namespace std;
 
 struct Point {
     vector<double> features;
     int label;
+    string source_file;  // Track which file this point came from
 
     Point() : label(-1) {}
-    Point(const vector<double>& f, int l = -1) : features(f), label(l) {}
+    Point(const vector<double>& f, int l = -1, const string& src = "") : features(f), label(l), source_file(src) {}
 };
 
 struct Centroid {
@@ -38,6 +40,7 @@ private:
     int max_iterations;
     double tolerance;
     map<string, vector<Point>> file_to_data;
+    vector<Point> test_data;  // Global test data loaded by master
     vector<Centroid> global_centroids;
     vector<Centroid> local_centroids;
 
@@ -48,7 +51,7 @@ public:
         MPI_Comm_size(MPI_COMM_WORLD, &size);
     }
 
-    vector<string> findDataFiles(const string& directory = "./data/uci_har/processed_data/split_data") {
+    vector<string> findDataFiles(const string& directory = "./data/uci_har/processed/train/split_data") {
         vector<string> files;
         if (!filesystem::exists(directory)) {
             if (rank == 0) {
@@ -93,33 +96,73 @@ public:
                     dimensions = features.size();
                 }
                 if (features.size() == dimensions) {
-                    file_to_data[filename].emplace_back(Point(features));
+                    file_to_data[filename].emplace_back(Point(features, -1, filename));
                 }
             }
         }
-        cout << "Worker " << rank << " loaded " << file_to_data[filename].size() << " points from " << filename << endl;
+        cout << "Worker " << rank << " loaded " << file_to_data[filename].size() 
+             << " training points from " << filename << endl;
+    }
+
+    void loadTestData(const string& filename = "./data/uci_har/processed/test/X_test_pca.csv") {
+        if (rank != 0) return;  // Only master loads test data
+        
+        ifstream file(filename);
+        if (!file.is_open()) {
+            cout << "Master could not open test file: " << filename << endl;
+            return;
+        }
+
+        string line;
+        while (getline(file, line)) {
+            if (line.empty()) continue;
+
+            istringstream iss(line);
+            vector<double> features;
+            string value;
+
+            while (getline(iss, value, ',')) {
+                try {
+                    features.push_back(stod(value));
+                } catch (...) {
+                    continue;
+                }
+            }
+
+            if (!features.empty()) {
+                if (features.size() == dimensions) {
+                    test_data.emplace_back(Point(features, -1, filename));
+                }
+            }
+        }
+        cout << "Master loaded " << test_data.size() << " test points from " << filename << endl;
     }
 
     void distributeData() {
         if (rank == 0) {
-            vector<string> files = findDataFiles();
+            vector<string> train_files = findDataFiles();
             int num_workers = size - 1;
 
-            cout << "Distributing " << files.size() << " files to " << num_workers << " workers" << endl;
+            cout << "Distributing " << train_files.size() << " training files to " << num_workers << " workers" << endl;
 
-            for (int i = 0; i < files.size(); i++) {
+            // Distribute training files
+            for (int i = 0; i < train_files.size(); i++) {
                 int worker = (i % num_workers) + 1;
-                string filename = files[i];
+                string filename = train_files[i];
                 int len = filename.length();
 
                 MPI_Send(&len, 1, MPI_INT, worker, 0, MPI_COMM_WORLD);
                 MPI_Send(filename.c_str(), len, MPI_CHAR, worker, 1, MPI_COMM_WORLD);
             }
 
+            // Send termination signal to all workers
             for (int worker = 1; worker < size; worker++) {
                 int len = 0;
                 MPI_Send(&len, 1, MPI_INT, worker, 0, MPI_COMM_WORLD);
             }
+
+            // Load test data globally on master
+            loadTestData();
 
         } else {
             while (true) {
@@ -262,6 +305,7 @@ public:
 
     double computeLocalInertia() {
         double inertia = 0.0;
+        
         for (const auto& [filename, data] : file_to_data) {
             for (const auto& point : data) {
                 if (point.label >= 0 && point.label < k) {
@@ -284,6 +328,71 @@ public:
         MPI_Bcast(&global_inertia, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
         
         return global_inertia;
+    }
+
+    void exportCentroids() {
+        if (rank != 0) return;
+
+        // Create output directory
+        filesystem::create_directories("./fed_cluster_assignments");
+        
+        ofstream centroids_file("./fed_cluster_assignments/final_centroids.csv");
+        if (!centroids_file.is_open()) {
+            cout << "Could not create centroids file" << endl;
+            return;
+        }
+
+        // Write header
+        centroids_file << "cluster_id";
+        for (int j = 0; j < dimensions; j++) {
+            centroids_file << ",feature_" << j;
+        }
+        centroids_file << "\n";
+
+        // Write centroid data
+        for (int i = 0; i < k; i++) {
+            centroids_file << i;
+            for (int j = 0; j < dimensions; j++) {
+                centroids_file << "," << fixed << setprecision(6) << global_centroids[i].center[j];
+            }
+            centroids_file << "\n";
+        }
+        centroids_file.close();
+        cout << "Exported final centroids to ./fed_cluster_assignments/final_centroids.csv" << endl;
+    }
+
+    void exportTestAssignments() {
+        if (rank != 0) return;  // Only master exports test assignments
+        
+        // Create output directory
+        filesystem::create_directories("./fed_cluster_assignments");
+        
+        ofstream assignments_file("./fed_cluster_assignments/test_assignments.csv");
+        
+        if (!assignments_file.is_open()) {
+            cout << "Could not create test assignments file" << endl;
+            return;
+        }
+
+        // Write header
+        assignments_file << "point_index,cluster_assignment";
+        for (int j = 0; j < dimensions; j++) {
+            assignments_file << ",feature_" << j;
+        }
+        assignments_file << "\n";
+
+        // Write test point assignments
+        for (int i = 0; i < test_data.size(); i++) {
+            const auto& point = test_data[i];
+            assignments_file << i << "," << point.label;
+            for (int j = 0; j < dimensions; j++) {
+                assignments_file << "," << fixed << setprecision(6) << point.features[j];
+            }
+            assignments_file << "\n";
+        }
+        
+        assignments_file.close();
+        cout << "Exported test assignments to ./fed_cluster_assignments/test_assignments.csv" << endl;
     }
 
     void train() {
@@ -342,80 +451,29 @@ public:
         }
     }
 
-    void exportClusterAssignments(const string& output_dir = "./cluster_assignments") {
-        // Create output directory if it doesn't exist
-        if (!filesystem::exists(output_dir)) {
-            try {
-                filesystem::create_directories(output_dir);
-                cout << "Worker " << rank << " created directory: " << output_dir << endl;
-            } catch (const filesystem::filesystem_error& e) {
-                cerr << "Worker " << rank << " failed to create directory " << output_dir << ": " << e.what() << endl;
-                return;
-            }
-        }
+    void test() {
+        if (rank == 0) {
+            cout << "\n=== Testing Phase ===" << endl;
+            cout << "Assigning test data to clusters using trained centroids..." << endl;
 
-        // Check if we have any data to export
-        if (file_to_data.empty()) {
-            cout << "Worker " << rank << " has no data to export." << endl;
-            return;
-        }
+            // Assign cluster labels to test data using trained centroids
+            for (auto& point : test_data) {
+                double min_dist = numeric_limits<double>::max();
+                int best_cluster = 0;
 
-        cout << "Worker " << rank << " preparing to export. File count: " << file_to_data.size() << endl;
-
-        for (const auto& [filepath, data] : file_to_data) {
-            if (data.empty()) {
-                cout << "Worker " << rank << " skipping empty dataset from: " << filepath << endl;
-                continue;
-            }
-            
-            cout << "Worker " << rank << " exporting file: " << filepath << ", points: " << data.size() << endl;
-            
-            // Extract just the filename without path and extension
-            string filename = filesystem::path(filepath).stem().string();
-            string out_path = output_dir + "/worker_" + to_string(rank) + "_" + filename + "_assignments.csv";
-
-            ofstream out(out_path);
-            if (!out.is_open()) {
-                cerr << "Worker " << rank << " failed to open " << out_path << " for writing." << endl;
-                continue;
-            }
-
-            // Write header
-            out << "# Features,Cluster_Assignment" << endl;
-            
-            // Check if points have been assigned to clusters
-            bool has_assignments = false;
-            for (const auto& point : data) {
-                if (point.label >= 0) {
-                    has_assignments = true;
-                    break;
-                }
-            }
-            
-            if (!has_assignments) {
-                cout << "Worker " << rank << " warning: No cluster assignments found for " << filepath << endl;
-            }
-
-            // Export each point with its features and cluster assignment
-            for (const auto& point : data) {
-                // Write features
-                for (size_t i = 0; i < point.features.size(); ++i) {
-                    out << fixed << setprecision(6) << point.features[i];
-                    if (i != point.features.size() - 1) {
-                        out << ",";
+                for (int i = 0; i < k; i++) {
+                    double dist = euclideanDistance(point.features, global_centroids[i].center);
+                    if (dist < min_dist) {
+                        min_dist = dist;
+                        best_cluster = i;
                     }
                 }
-                // Write cluster assignment
-                out << "," << point.label << "\n";
+                point.label = best_cluster;
             }
 
-            out.close();
-            cout << "Worker " << rank << " successfully wrote " << data.size() << " points to: " << out_path << endl;
+            exportCentroids();
+            exportTestAssignments();
         }
-    }
-   
-    bool fileToDataEmpty() const {
-        return file_to_data.empty();
     }
 };
 
@@ -462,7 +520,7 @@ int main(int argc, char* argv[]) {
     // Federated Learning
     FederatedKMeans fed_kmeans(k);
     
-    // Data distribution
+    // Data distribution (both training and test data)
     fed_kmeans.distributeData();
     
     // Training
@@ -470,17 +528,20 @@ int main(int argc, char* argv[]) {
     fed_kmeans.train();
     double fed_time = MPI_Wtime() - start_time;
     
-    // Export results
-    if (rank > 0 && !fed_kmeans.fileToDataEmpty()) {
-        fed_kmeans.exportClusterAssignments();
-        cout << "Worker " << rank << " exported cluster assignments." << endl;
-    }
+    // Testing
+    double test_start_time = MPI_Wtime();
+    fed_kmeans.test();
+    double test_time = MPI_Wtime() - test_start_time;
     
     // Final results
     if (rank == 0) {
         cout << "\n=== Results ===" << endl;
         cout << "Federated training time: " << fed_time << " seconds" << endl;
-        cout << "Check ./cluster_assignments/ directory for exported results." << endl;
+        cout << "Testing time: " << test_time << " seconds" << endl;
+        cout << "Total time: " << (fed_time + test_time) << " seconds" << endl;
+        cout << "\nExported files:" << endl;
+        cout << "- Final centroids: ./fed_cluster_assignments/final_centroids.csv" << endl;
+        cout << "- Test assignments: ./fed_cluster_assignments/test_assignments.csv" << endl;
     }
     
     MPI_Finalize();
