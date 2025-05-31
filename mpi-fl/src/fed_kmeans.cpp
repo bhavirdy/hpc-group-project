@@ -9,275 +9,311 @@
 #include <random>
 #include <cmath>
 #include <iomanip>
-#include <map>
 #include <filesystem>
+#include <stdexcept>
 
 using namespace std;
 
 struct Point {
     vector<double> features;
-    int label;
-    string source_file;  // Track which file this point came from
-
-    Point() : label(-1) {}
-    Point(const vector<double>& f, int l = -1, const string& src = "") : features(f), label(l), source_file(src) {}
+    int cluster_label;
+    
+    Point() : cluster_label(-1) {}
+    Point(const vector<double>& f) : features(f), cluster_label(-1) {}
+    Point(const vector<double>& f, int label) : features(f), cluster_label(label) {}
 };
 
 struct Centroid {
     vector<double> center;
-    int count;
-
-    Centroid() : count(0) {}
-    Centroid(int dim) : center(dim, 0.0), count(0) {}
-    Centroid(const vector<double>& c) : center(c), count(0) {}
+    int point_count;
+    
+    Centroid() : point_count(0) {}
+    Centroid(int dimensions) : center(dimensions, 0.0), point_count(0) {}
+    Centroid(const vector<double>& c) : center(c), point_count(0) {}
+    
+    void reset(int dimensions) {
+        center.assign(dimensions, 0.0);
+        point_count = 0;
+    }
 };
 
 class FederatedKMeans {
 private:
+    // MPI variables
     int rank, size;
-    int k;
-    int dimensions = 100;
+    
+    // Algorithm parameters
+    int k_clusters;
+    int dimensions;
     int max_iterations;
-    double tolerance;
-    map<string, vector<Point>> file_to_data;
-    vector<Point> test_data;  // Global test data loaded by master
+    double convergence_tolerance;
+    
+    // Data storage
+    vector<Point> local_data;
+    vector<Point> test_data;  // Only used by master
+    
+    // Clustering state
     vector<Centroid> global_centroids;
     vector<Centroid> local_centroids;
 
 public:
-    FederatedKMeans(int k_clusters, int max_iter = 100, double tol = 1e-6)
-        : k(k_clusters), max_iterations(max_iter), tolerance(tol) {
+    FederatedKMeans(int k, int max_iter = 100, double tolerance = 1e-6) 
+        : k_clusters(k), dimensions(0), max_iterations(max_iter), convergence_tolerance(tolerance) {
         MPI_Comm_rank(MPI_COMM_WORLD, &rank);
         MPI_Comm_size(MPI_COMM_WORLD, &size);
+        
+        if (size < 2) {
+            throw runtime_error("Requires at least 2 MPI processes (1 master + 1 worker)");
+        }
     }
 
     vector<string> findDataFiles(const string& directory = "./data/uci_har/processed/train/split_data") {
         vector<string> files;
+        
         if (!filesystem::exists(directory)) {
             if (rank == 0) {
-                cout << "Directory does not exist: " << directory << endl;
+                cout << "Warning: Directory does not exist: " << directory << endl;
             }
-        } else {
+            return files;
+        }
+        
+        try {
             for (const auto& entry : filesystem::directory_iterator(directory)) {
                 if (entry.path().extension() == ".csv") {
                     files.push_back(entry.path().string());
                 }
             }
+            sort(files.begin(), files.end());
+        } catch (const exception& e) {
+            if (rank == 0) {
+                cout << "Error reading directory: " << e.what() << endl;
+            }
         }
-        sort(files.begin(), files.end());
+        
         return files;
     }
 
-    void loadData(const string& filename) {
+    bool loadDataFromFile(const string& filename, vector<Point>& data_container) {
         ifstream file(filename);
         if (!file.is_open()) {
-            cout << "Worker " << rank << " could not open: " << filename << endl;
-            return;
+            cout << "Process " << rank << " failed to open: " << filename << endl;
+            return false;
         }
 
         string line;
-        getline(file, line);
+        bool first_line = true;
+        int loaded_points = 0;
+
         while (getline(file, line)) {
             if (line.empty()) continue;
+            
+            // Skip header line
+            if (first_line) {
+                first_line = false;
+                continue;
+            }
 
             istringstream iss(line);
             vector<double> features;
             string value;
 
+            // Parse CSV values
             while (getline(iss, value, ',')) {
                 try {
                     features.push_back(stod(value));
-                } catch (...) {
+                } catch (const exception&) {
+                    // Skip invalid values
                     continue;
                 }
             }
 
             if (!features.empty()) {
+                // Set dimensions from first valid point
                 if (dimensions == 0) {
                     dimensions = features.size();
                 }
+                
+                // Only accept points with correct dimensions
                 if (features.size() == dimensions) {
-                    file_to_data[filename].emplace_back(Point(features, -1, filename));
+                    data_container.emplace_back(Point(features));
+                    loaded_points++;
                 }
             }
         }
-        cout << "Worker " << rank << " loaded " << file_to_data[filename].size() 
-             << " training points from " << filename << endl;
+
+        cout << "Process " << rank << " loaded " << loaded_points 
+             << " points from " << filename << endl;
+        return loaded_points > 0;
     }
 
-    void loadTestData(const string& filename = "./data/uci_har/processed/test/X_test_pca.csv") {
-        if (rank != 0) return;  // Only master loads test data
-        
-        ifstream file(filename);
-        if (!file.is_open()) {
-            cout << "Master could not open test file: " << filename << endl;
-            return;
-        }
-
-        string line;
-        getline(file, line);
-
-        while (getline(file, line)) {
-            if (line.empty()) continue;
-
-            istringstream iss(line);
-            vector<double> features;
-            string value;
-
-            while (getline(iss, value, ',')) {
-                try {
-                    features.push_back(stod(value));
-                } catch (...) {
-                    continue;
-                }
-            }
-
-            if (!features.empty()) {
-                if (features.size() == dimensions) {
-                    test_data.emplace_back(Point(features, -1, filename));
-                }
-            }
-        }
-        cout << "Master loaded " << test_data.size() << " test points from " << filename << endl;
-    }
-
-    void distributeData() {
+    void distributeTrainingData() {
         if (rank == 0) {
+            // Master distributes files to workers
             vector<string> train_files = findDataFiles();
             int num_workers = size - 1;
 
-            cout << "Distributing " << train_files.size() << " training files to " << num_workers << " workers" << endl;
+            if (train_files.empty()) {
+                cout << "No training files found!" << endl;
+                return;
+            }
 
-            // Distribute training files
-            for (int i = 0; i < train_files.size(); i++) {
-                int worker = (i % num_workers) + 1;
+            cout << "Distributing " << train_files.size() 
+                 << " files to " << num_workers << " workers" << endl;
+
+            // Round-robin distribution of files to workers
+            for (size_t i = 0; i < train_files.size(); i++) {
+                int target_worker = (i % num_workers) + 1;
                 string filename = train_files[i];
-                int len = filename.length();
+                int filename_length = filename.length();
 
-                MPI_Send(&len, 1, MPI_INT, worker, 0, MPI_COMM_WORLD);
-                MPI_Send(filename.c_str(), len, MPI_CHAR, worker, 1, MPI_COMM_WORLD);
+                MPI_Send(&filename_length, 1, MPI_INT, target_worker, 0, MPI_COMM_WORLD);
+                MPI_Send(filename.c_str(), filename_length, MPI_CHAR, target_worker, 1, MPI_COMM_WORLD);
             }
 
-            // Send termination signal to all workers
+            // Send termination signals
             for (int worker = 1; worker < size; worker++) {
-                int len = 0;
-                MPI_Send(&len, 1, MPI_INT, worker, 0, MPI_COMM_WORLD);
+                int termination_signal = 0;
+                MPI_Send(&termination_signal, 1, MPI_INT, worker, 0, MPI_COMM_WORLD);
             }
 
-            // Load test data globally on master
+            // Load test data on master
             loadTestData();
 
         } else {
+            // Workers receive and load files
             while (true) {
-                int len;
-                MPI_Recv(&len, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                int filename_length;
+                MPI_Recv(&filename_length, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
-                if (len == 0) break;
+                if (filename_length == 0) break;  // Termination signal
 
-                char* buffer = new char[len + 1];
-                MPI_Recv(buffer, len, MPI_CHAR, 0, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                buffer[len] = '\0';
+                vector<char> filename_buffer(filename_length + 1);
+                MPI_Recv(filename_buffer.data(), filename_length, MPI_CHAR, 0, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                filename_buffer[filename_length] = '\0';
 
-                loadData(string(buffer));
-                delete[] buffer;
+                string filename(filename_buffer.data());
+                loadDataFromFile(filename, local_data);
             }
+        }
+
+        // Synchronize dimensions across all processes
+        MPI_Bcast(&dimensions, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    }
+
+    void loadTestData(const string& test_file = "./data/uci_har/processed/test/X_test_pca.csv") {
+        if (rank != 0) return;  // Only master loads test data
+        
+        cout << "Loading test data..." << endl;
+        if (loadDataFromFile(test_file, test_data)) {
+            cout << "Loaded " << test_data.size() << " test points" << endl;
         }
     }
 
-    void initialiseCentroids() {
+    void initializeCentroids() {
+        global_centroids.resize(k_clusters);
+        
         if (rank == 0) {
-            // Initialize centroids from data
+            // Master initializes centroids randomly
             random_device rd;
             mt19937 gen(rd());
+            uniform_real_distribution<double> dist(-50.0, 50.0);
 
-            vector<int> indices(data.size());
-            iota(indices.begin(), indices.end(), 0);
-            shuffle(indices.begin(), indices.end(), gen);
-
-            centroids.resize(k);
-            for (int i = 0; i < k; i++) {
-                centroids[i] = Centroid(data[indices[i]].features);
+            for (int i = 0; i < k_clusters; i++) {
+                global_centroids[i] = Centroid(dimensions);
+                for (int j = 0; j < dimensions; j++) {
+                    global_centroids[i].center[j] = dist(gen);
+                }
             }
+            
+            cout << "Initialized " << k_clusters << " centroids randomly" << endl;
         } else {
-            // Workers need to initialise their global_centroids structure
-            global_centroids.resize(k);
-            for (int i = 0; i < k; i++) {
-                global_centroids[i].center.resize(dimensions);
+            // Workers initialize empty centroid structures
+            for (int i = 0; i < k_clusters; i++) {
+                global_centroids[i] = Centroid(dimensions);
             }
         }
-        
-        // Broadcast to all processes (including workers)
+
         broadcastCentroids();
+        
+        // Initialize local centroids
+        local_centroids.resize(k_clusters);
+        for (int i = 0; i < k_clusters; i++) {
+            local_centroids[i] = Centroid(dimensions);
+        }
     }
 
     void broadcastCentroids() {
-        // Broadcast dimensions first
-        MPI_Bcast(&dimensions, 1, MPI_INT, 0, MPI_COMM_WORLD);
-        
-        // Broadcast each centroid
-        for (int i = 0; i < k; i++) {
+        // Broadcast centroids from master to all processes
+        for (int i = 0; i < k_clusters; i++) {
             MPI_Bcast(global_centroids[i].center.data(), dimensions, MPI_DOUBLE, 0, MPI_COMM_WORLD);
         }
     }
 
-    double euclideanDistance(const vector<double>& a, const vector<double>& b) {
-        double sum = 0.0;
-        for (size_t i = 0; i < a.size(); i++) {
-            double diff = a[i] - b[i];
-            sum += diff * diff;
+    double calculateDistance(const vector<double>& point1, const vector<double>& point2) {
+        double sum_squared_diff = 0.0;
+        for (size_t i = 0; i < point1.size(); i++) {
+            double diff = point1[i] - point2[i];
+            sum_squared_diff += diff * diff;
         }
-        return sqrt(sum);
+        return sqrt(sum_squared_diff);
     }
 
-    void localKMeansStep() {
-        local_centroids.assign(k, Centroid(dimensions));
+    void performLocalClustering() {
+        // Reset local centroids
+        for (int i = 0; i < k_clusters; i++) {
+            local_centroids[i].reset(dimensions);
+        }
 
-        for (auto& [filename, data] : file_to_data) {
-            for (auto& point : data) {
-                double min_dist = numeric_limits<double>::max();
-                int best_cluster = 0;
+        // Assign points to nearest centroid and accumulate for new centroid calculation
+        for (auto& point : local_data) {
+            double min_distance = numeric_limits<double>::max();
+            int best_cluster = 0;
 
-                for (int i = 0; i < k; i++) {
-                    double dist = euclideanDistance(point.features, global_centroids[i].center);
-                    if (dist < min_dist) {
-                        min_dist = dist;
-                        best_cluster = i;
-                    }
+            // Find nearest centroid
+            for (int i = 0; i < k_clusters; i++) {
+                double distance = calculateDistance(point.features, global_centroids[i].center);
+                if (distance < min_distance) {
+                    min_distance = distance;
+                    best_cluster = i;
                 }
+            }
 
-                point.label = best_cluster;
-                local_centroids[best_cluster].count++;
-                for (int j = 0; j < dimensions; j++) {
-                    local_centroids[best_cluster].center[j] += point.features[j];
-                }
+            // Assign point to cluster
+            point.cluster_label = best_cluster;
+
+            // Accumulate for centroid calculation
+            local_centroids[best_cluster].point_count++;
+            for (int j = 0; j < dimensions; j++) {
+                local_centroids[best_cluster].center[j] += point.features[j];
             }
         }
 
-        for (int i = 0; i < k; i++) {
-            if (local_centroids[i].count > 0) {
+        // Calculate local centroid averages
+        for (int i = 0; i < k_clusters; i++) {
+            if (local_centroids[i].point_count > 0) {
                 for (int j = 0; j < dimensions; j++) {
-                    local_centroids[i].center[j] /= local_centroids[i].count;
+                    local_centroids[i].center[j] /= local_centroids[i].point_count;
                 }
             }
         }
     }
 
-    void federatedAveraging() {
+    void aggregateCentroids() {
         if (rank == 0) {
-            vector<Centroid> aggregated_centroids(k, Centroid(dimensions));
-            vector<int> total_counts(k, 0);
+            // Master aggregates centroids from all workers
+            vector<Centroid> aggregated_centroids(k_clusters, Centroid(dimensions));
+            vector<int> total_point_counts(k_clusters, 0);
 
-            // Receive from all workers
+            // Collect centroids from all workers
             for (int worker = 1; worker < size; worker++) {
-                for (int i = 0; i < k; i++) {
+                for (int i = 0; i < k_clusters; i++) {
                     vector<double> worker_centroid(dimensions);
                     int worker_count;
 
-                    MPI_Recv(worker_centroid.data(), dimensions, MPI_DOUBLE,
-                        worker, 4, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                    MPI_Recv(&worker_count, 1, MPI_INT, worker, 5, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                    MPI_Recv(worker_centroid.data(), dimensions, MPI_DOUBLE, worker, 100 + i, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                    MPI_Recv(&worker_count, 1, MPI_INT, worker, 200 + i, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
-                    total_counts[i] += worker_count;
+                    total_point_counts[i] += worker_count;
                     if (worker_count > 0) {
                         for (int j = 0; j < dimensions; j++) {
                             aggregated_centroids[i].center[j] += worker_centroid[j] * worker_count;
@@ -286,182 +322,185 @@ public:
                 }
             }
 
-            // Update global centroids
-            for (int i = 0; i < k; i++) {
-                if (total_counts[i] > 0) {
+            // Update global centroids with weighted average
+            for (int i = 0; i < k_clusters; i++) {
+                if (total_point_counts[i] > 0) {
                     for (int j = 0; j < dimensions; j++) {
-                        global_centroids[i].center[j] = aggregated_centroids[i].center[j] / total_counts[i];
+                        global_centroids[i].center[j] = aggregated_centroids[i].center[j] / total_point_counts[i];
                     }
+                } else {
+                    // Keep previous centroid if no points assigned
+                    cout << "Warning: Cluster " << i << " has no assigned points" << endl;
                 }
             }
+
         } else {
-            // Workers send their local centroids
-            for (int i = 0; i < k; i++) {
-                MPI_Send(local_centroids[i].center.data(), dimensions,
-                    MPI_DOUBLE, 0, 4, MPI_COMM_WORLD);
-                MPI_Send(&local_centroids[i].count, 1, MPI_INT, 0, 5, MPI_COMM_WORLD);
+            // Workers send their local centroids to master
+            for (int i = 0; i < k_clusters; i++) {
+                MPI_Send(local_centroids[i].center.data(), dimensions, MPI_DOUBLE, 0, 100 + i, MPI_COMM_WORLD);
+                MPI_Send(&local_centroids[i].point_count, 1, MPI_INT, 0, 200 + i, MPI_COMM_WORLD);
             }
         }
-        
+
         // Broadcast updated centroids to all processes
         broadcastCentroids();
     }
 
-    double computeLocalInertia() {
+    double calculateLocalInertia() {
         double inertia = 0.0;
-        
-        for (const auto& [filename, data] : file_to_data) {
-            for (const auto& point : data) {
-                if (point.label >= 0 && point.label < k) {
-                    double dist = euclideanDistance(point.features, global_centroids[point.label].center);
-                    inertia += dist * dist;
-                }
+        for (const auto& point : local_data) {
+            if (point.cluster_label >= 0 && point.cluster_label < k_clusters) {
+                double distance = calculateDistance(point.features, global_centroids[point.cluster_label].center);
+                inertia += distance * distance;
             }
         }
         return inertia;
     }
 
-    double computeGlobalInertia() {
-        double local_inertia = computeLocalInertia();
+    double calculateGlobalInertia() {
+        double local_inertia = calculateLocalInertia();
         double global_inertia = 0.0;
         
-        // All processes must participate in MPI_Reduce
         MPI_Reduce(&local_inertia, &global_inertia, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-        
-        // Broadcast the result back to all processes so they all have the same value
         MPI_Bcast(&global_inertia, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
         
         return global_inertia;
     }
 
-    void exportCentroids() {
-        if (rank != 0) return;
-
-        // Create output directory
-        filesystem::create_directories("./fed_cluster_assignments");
+    void train() {
+        cout << "Process " << rank << " starting training with " << local_data.size() << " data points" << endl;
         
-        ofstream centroids_file("./fed_cluster_assignments/final_centroids.csv");
-        if (!centroids_file.is_open()) {
-            cout << "Could not create centroids file" << endl;
+        initializeCentroids();
+        
+        double previous_inertia = numeric_limits<double>::max();
+        bool has_converged = false;
+        
+        for (int iteration = 0; iteration < max_iterations; iteration++) {
+            // Local K-means step
+            performLocalClustering();
+            
+            // Federated averaging
+            aggregateCentroids();
+            
+            // Check convergence
+            double current_inertia = calculateGlobalInertia();
+            
+            if (rank == 0) {
+                cout << "Iteration " << (iteration + 1) 
+                     << ", Global Inertia: " << fixed << setprecision(6) << current_inertia << endl;
+                
+                if (abs(previous_inertia - current_inertia) < convergence_tolerance) {
+                    cout << "Converged after " << (iteration + 1) << " iterations" << endl;
+                    has_converged = true;
+                }
+                previous_inertia = current_inertia;
+            }
+            
+            // Broadcast convergence decision
+            int convergence_flag = has_converged ? 1 : 0;
+            MPI_Bcast(&convergence_flag, 1, MPI_INT, 0, MPI_COMM_WORLD);
+            has_converged = (convergence_flag == 1);
+            
+            if (has_converged) break;
+        }
+        
+        if (rank == 0) {
+            cout << "Training completed" << endl;
+        }
+    }
+
+    void runInference() {
+        if (rank != 0) return;  // Only master runs inference
+
+        cout << "\n=== Running Inference on Test Data ===" << endl;
+        
+        // Assign cluster labels to test data
+        for (auto& point : test_data) {
+            double min_distance = numeric_limits<double>::max();
+            int best_cluster = 0;
+
+            for (int i = 0; i < k_clusters; i++) {
+                double distance = calculateDistance(point.features, global_centroids[i].center);
+                if (distance < min_distance) {
+                    min_distance = distance;
+                    best_cluster = i;
+                }
+            }
+            point.cluster_label = best_cluster;
+        }
+
+        cout << "Assigned " << test_data.size() << " test points to clusters" << endl;
+    }
+
+    void exportResults() {
+        if (rank != 0) return;  // Only master exports
+
+        try {
+            filesystem::create_directories("./fed_cluster_results");
+            
+            // Export centroids
+            exportCentroids();
+            
+            // Export test assignments
+            exportTestAssignments();
+            
+        } catch (const exception& e) {
+            cout << "Error creating output directory: " << e.what() << endl;
+        }
+    }
+
+private:
+    void exportCentroids() {
+        ofstream file("./fed_cluster_results/centroids.csv");
+        if (!file.is_open()) {
+            cout << "Failed to create centroids file" << endl;
             return;
         }
 
         // Write header
-        centroids_file << "cluster_id";
+        file << "cluster_id";
         for (int j = 0; j < dimensions; j++) {
-            centroids_file << ",feature_" << j;
+            file << ",feature_" << j;
         }
-        centroids_file << "\n";
+        file << "\n";
 
         // Write centroid data
-        for (int i = 0; i < k; i++) {
-            centroids_file << i;
+        for (int i = 0; i < k_clusters; i++) {
+            file << i;
             for (int j = 0; j < dimensions; j++) {
-                centroids_file << "," << fixed << setprecision(6) << global_centroids[i].center[j];
+                file << "," << fixed << setprecision(6) << global_centroids[i].center[j];
             }
-            centroids_file << "\n";
+            file << "\n";
         }
-        centroids_file.close();
-        cout << "Exported final centroids to ./fed_cluster_assignments/final_centroids.csv" << endl;
+        
+        cout << "Exported centroids to ./fed_cluster_results/centroids.csv" << endl;
     }
 
     void exportTestAssignments() {
-        if (rank != 0) return;  // Only master exports test assignments
-        
-        // Create output directory
-        filesystem::create_directories("./fed_cluster_assignments");
-        
-        ofstream assignments_file("./fed_cluster_assignments/test_assignments.csv");
-        
-        if (!assignments_file.is_open()) {
-            cout << "Could not create test assignments file" << endl;
+        ofstream file("./fed_cluster_results/test_assignments.csv");
+        if (!file.is_open()) {
+            cout << "Failed to create test assignments file" << endl;
             return;
         }
 
         // Write header
-        assignments_file << "point_index,cluster_assignment";
+        file << "point_index,cluster_assignment";
         for (int j = 0; j < dimensions; j++) {
-            assignments_file << ",feature_" << j;
+            file << ",feature_" << j;
         }
-        assignments_file << "\n";
+        file << "\n";
 
         // Write test point assignments
-        for (int i = 0; i < test_data.size(); i++) {
+        for (size_t i = 0; i < test_data.size(); i++) {
             const auto& point = test_data[i];
-            assignments_file << i << "," << point.label;
+            file << i << "," << point.cluster_label;
             for (int j = 0; j < dimensions; j++) {
-                assignments_file << "," << fixed << setprecision(6) << point.features[j];
+                file << "," << fixed << setprecision(6) << point.features[j];
             }
-            assignments_file << "\n";
+            file << "\n";
         }
         
-        assignments_file.close();
-        cout << "Exported test assignments to ./fed_cluster_assignments/test_assignments.csv" << endl;
-    }
-
-    void train() {
-        initialiseCentroids();
-        
-        double prev_inertia = numeric_limits<double>::max();
-        bool converged = false;
-        
-        for (int iteration = 0; iteration < max_iterations; iteration++) {        
-            localKMeansStep();
-    
-            federatedAveraging();
-            
-            double current_inertia = computeGlobalInertia();
-            
-            // Check convergence on master and broadcast decision to all processes
-            if (rank == 0) {
-                cout << "Iteration " << iteration + 1 << ", Inertia: "
-                    << fixed << setprecision(6) << current_inertia << endl;
-                
-                if (abs(prev_inertia - current_inertia) < tolerance) {
-                    cout << "Converged after " << iteration + 1 << " iterations" << endl;
-                    converged = true;
-                }
-                prev_inertia = current_inertia;
-            }
-            
-            // Broadcast convergence decision to all processes
-            int converged_flag = converged ? 1 : 0;
-            MPI_Bcast(&converged_flag, 1, MPI_INT, 0, MPI_COMM_WORLD);
-            converged = (converged_flag == 1);
-            
-            if (converged) {
-                break;
-            }
-        }
-        
-        if (rank == 0) {
-            cout << "Training loop completed." << endl;
-        }
-    }
-
-    void test() {
-        if (rank == 0) {
-            cout << "\n=== Testing Phase ===" << endl;
-            cout << "Assigning test data to clusters using trained centroids..." << endl;
-
-            // Assign cluster labels to test data using trained centroids
-            for (auto& point : test_data) {
-                double min_dist = numeric_limits<double>::max();
-                int best_cluster = 0;
-
-                for (int i = 0; i < k; i++) {
-                    double dist = euclideanDistance(point.features, global_centroids[i].center);
-                    if (dist < min_dist) {
-                        min_dist = dist;
-                        best_cluster = i;
-                    }
-                }
-                point.label = best_cluster;
-            }
-
-            exportCentroids();
-            exportTestAssignments();
-        }
+        cout << "Exported test assignments to ./fed_cluster_results/test_assignments.csv" << endl;
     }
 };
 
@@ -472,64 +511,73 @@ int main(int argc, char* argv[]) {
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
 
-    // Get the hostname of the node this process is running on
-    char hostname[HOST_NAME_MAX];
-    gethostname(hostname, HOST_NAME_MAX);
-
-    // Print which node the process is running on
-    cout << "Process " << rank << " running on node " << hostname << endl;
-    
-    if (argc < 2) {
-        if (rank == 0) {
-            cerr << "Usage: " << argv[0] << " <k_clusters>" << endl;
-            cerr << "Example: " << argv[0] << " 2" << endl;
+    try {
+        // Display node information
+        char hostname[HOST_NAME_MAX];
+        gethostname(hostname, HOST_NAME_MAX);
+        cout << "Process " << rank << " running on " << hostname << endl;
+        
+        // Parse command line arguments
+        if (argc < 2) {
+            if (rank == 0) {
+                cout << "Usage: " << argv[0] << " <k_clusters> [max_iterations] [tolerance]" << endl;
+                cout << "Example: " << argv[0] << " 6 100 1e-6" << endl;
+            }
+            MPI_Finalize();
+            return 1;
         }
-        MPI_Finalize();
-        return 1;
-    }
-    
-    int k = stoi(argv[1]);
-    
-    if (size < 2) {
+        
+        int k = stoi(argv[1]);
+        int max_iter = (argc > 2) ? stoi(argv[2]) : 100;
+        double tolerance = (argc > 3) ? stod(argv[3]) : 1e-6;
+        
         if (rank == 0) {
-            cerr << "This program requires at least 2 processes (1 server + 1 worker)" << endl;
+            cout << "\n=== Federated K-Means Configuration ===" << endl;
+            cout << "Processes: " << size << " (1 master + " << (size-1) << " workers)" << endl;
+            cout << "Clusters (k): " << k << endl;
+            cout << "Max iterations: " << max_iter << endl;
+            cout << "Convergence tolerance: " << tolerance << endl;
+            cout << "=========================================\n" << endl;
         }
-        MPI_Finalize();
-        return 1;
-    }
-    
-    if (rank == 0) {
-        cout << "=== Federated K-Means Clustering ===" << endl;
-        cout << "Processes: " << size << " (1 server + " << (size-1) << " workers)" << endl;
-        cout << "K clusters: " << k << endl;
-        cout << endl;
-    }
-    
-    // Federated Learning
-    FederatedKMeans fed_kmeans(k);
-    
-    // Data distribution (both training and test data)
-    fed_kmeans.distributeData();
-    
-    // Training
-    double start_time = MPI_Wtime();
-    fed_kmeans.train();
-    double fed_time = MPI_Wtime() - start_time;
-    
-    // Testing
-    double test_start_time = MPI_Wtime();
-    fed_kmeans.test();
-    double test_time = MPI_Wtime() - test_start_time;
-    
-    // Final results
-    if (rank == 0) {
-        cout << "\n=== Results ===" << endl;
-        cout << "Federated training time: " << fed_time << " seconds" << endl;
-        cout << "Testing time: " << test_time << " seconds" << endl;
-        cout << "Total time: " << (fed_time + test_time) << " seconds" << endl;
-        cout << "\nExported files:" << endl;
-        cout << "- Final centroids: ./fed_cluster_assignments/final_centroids.csv" << endl;
-        cout << "- Test assignments: ./fed_cluster_assignments/test_assignments.csv" << endl;
+        
+        // Create and run federated K-means
+        FederatedKMeans fed_kmeans(k, max_iter, tolerance);
+        
+        // Data distribution phase
+        double start_time = MPI_Wtime();
+        fed_kmeans.distributeTrainingData();
+        double distribution_time = MPI_Wtime() - start_time;
+        
+        // Training phase
+        double training_start = MPI_Wtime();
+        fed_kmeans.train();
+        double training_time = MPI_Wtime() - training_start;
+        
+        // Inference phase
+        double inference_start = MPI_Wtime();
+        fed_kmeans.runInference();
+        double inference_time = MPI_Wtime() - inference_start;
+        
+        // Export results
+        fed_kmeans.exportResults();
+        
+        double total_time = MPI_Wtime() - start_time;
+        
+        // Display results
+        if (rank == 0) {
+            cout << "\n=== Performance Results ===" << endl;
+            cout << "Data distribution time: " << fixed << setprecision(3) << distribution_time << " seconds" << endl;
+            cout << "Training time: " << training_time << " seconds" << endl;
+            cout << "Inference time: " << inference_time << " seconds" << endl;
+            cout << "Total execution time: " << total_time << " seconds" << endl;
+            cout << "\nOutput files:" << endl;
+            cout << "- Centroids: ./fed_cluster_results/centroids.csv" << endl;
+            cout << "- Test assignments: ./fed_cluster_results/test_assignments.csv" << endl;
+        }
+        
+    } catch (const exception& e) {
+        cout << "Process " << rank << " encountered error: " << e.what() << endl;
+        MPI_Abort(MPI_COMM_WORLD, 1);
     }
     
     MPI_Finalize();

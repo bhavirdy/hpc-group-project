@@ -15,3 +15,7 @@ K_CLUSTERS=2
 echo "Running Federated K-Means with $NUM_PROCS processes and $K_CLUSTERS clusters"
 
 mpirun -np $NUM_PROCS ./fed_kmeans $K_CLUSTERS
+
+echo "Calculating Metrics"
+
+python3 ./fed_cluster_assignments/metrics.py
