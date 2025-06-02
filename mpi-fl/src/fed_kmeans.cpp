@@ -37,6 +37,42 @@ struct Centroid {
     }
 };
 
+struct CommTracker {
+    long long total_bytes_sent;
+    long long total_bytes_received;
+    long long broadcast_bytes;
+    long long p2p_bytes;
+    
+    CommTracker() : total_bytes_sent(0), total_bytes_received(0), broadcast_bytes(0), p2p_bytes(0) {}
+    
+    void addBroadcast(long long bytes) {
+        broadcast_bytes += bytes;
+        total_bytes_sent += bytes;
+    }
+    
+    void addSend(long long bytes) {
+        p2p_bytes += bytes;
+        total_bytes_sent += bytes;
+    }
+    
+    void addReceive(long long bytes) {
+        p2p_bytes += bytes;
+        total_bytes_received += bytes;
+    }
+    
+    double getTotalMB() const {
+        return (total_bytes_sent + total_bytes_received) / (1024.0 * 1024.0);
+    }
+    
+    double getBroadcastMB() const {
+        return broadcast_bytes / (1024.0 * 1024.0);
+    }
+    
+    double getP2PMB() const {
+        return p2p_bytes / (1024.0 * 1024.0);
+    }
+};
+
 class FederatedKMeans {
 private:
     // MPI variables
@@ -55,6 +91,9 @@ private:
     // Clustering state
     vector<Centroid> global_centroids;
     vector<Centroid> local_centroids;
+    
+    // Communication tracking
+    CommTracker comm_tracker;
 
 public:
     FederatedKMeans(int k, int max_iter = 100, double tolerance = 1e-6) 
@@ -167,13 +206,17 @@ public:
                 int filename_length = filename.length();
 
                 MPI_Send(&filename_length, 1, MPI_INT, target_worker, 0, MPI_COMM_WORLD);
+                comm_tracker.addSend(sizeof(int));
+                
                 MPI_Send(filename.c_str(), filename_length, MPI_CHAR, target_worker, 1, MPI_COMM_WORLD);
+                comm_tracker.addSend(filename_length);
             }
 
             // Send termination signals
             for (int worker = 1; worker < size; worker++) {
                 int termination_signal = 0;
                 MPI_Send(&termination_signal, 1, MPI_INT, worker, 0, MPI_COMM_WORLD);
+                comm_tracker.addSend(sizeof(int));
             }
 
             // Load test data on master
@@ -184,11 +227,13 @@ public:
             while (true) {
                 int filename_length;
                 MPI_Recv(&filename_length, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                comm_tracker.addReceive(sizeof(int));
 
                 if (filename_length == 0) break;  // Termination signal
 
                 vector<char> filename_buffer(filename_length + 1);
                 MPI_Recv(filename_buffer.data(), filename_length, MPI_CHAR, 0, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                comm_tracker.addReceive(filename_length);
                 filename_buffer[filename_length] = '\0';
 
                 string filename(filename_buffer.data());
@@ -198,6 +243,7 @@ public:
 
         // Synchronize dimensions across all processes
         MPI_Bcast(&dimensions, 1, MPI_INT, 0, MPI_COMM_WORLD);
+        comm_tracker.addBroadcast(sizeof(int));
     }
 
     void loadTestData(const string& test_file = "./data/uci_har/processed/test/X_test_pca.csv") {
@@ -209,7 +255,7 @@ public:
         }
     }
 
-    void initializeCentroidsKMeansPlusPlus(const string& full_training_file = "./data/uci_har/processed/train/X_train_pca.csv") {
+    void initialiseCentroidsKMeansPlusPlus(const string& full_training_file = "./data/uci_har/processed/train/X_train_pca.csv") {
         global_centroids.resize(k_clusters);
         
         if (rank == 0) {
@@ -245,7 +291,7 @@ public:
                     
                     // Find distance to nearest existing centroid
                     for (int existing_c = 0; existing_c < c; existing_c++) {
-                        double dist = calculateDistance(all_training_data[i].features, 
+                        double dist = euclideanDistance(all_training_data[i].features, 
                                                     global_centroids[existing_c].center);
                         double dist_sq = dist * dist;
                         if (dist_sq < min_dist_sq) {
@@ -301,10 +347,11 @@ public:
         // Broadcast centroids from master to all processes
         for (int i = 0; i < k_clusters; i++) {
             MPI_Bcast(global_centroids[i].center.data(), dimensions, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+            comm_tracker.addBroadcast(dimensions * sizeof(double));
         }
     }
 
-    double calculateDistance(const vector<double>& point1, const vector<double>& point2) {
+    double euclideanDistance(const vector<double>& point1, const vector<double>& point2) {
         double sum_squared_diff = 0.0;
         for (size_t i = 0; i < point1.size(); i++) {
             double diff = point1[i] - point2[i];
@@ -326,7 +373,7 @@ public:
 
             // Find nearest centroid
             for (int i = 0; i < k_clusters; i++) {
-                double distance = calculateDistance(point.features, global_centroids[i].center);
+                double distance = euclideanDistance(point.features, global_centroids[i].center);
                 if (distance < min_distance) {
                     min_distance = distance;
                     best_cluster = i;
@@ -353,7 +400,7 @@ public:
         }
     }
 
-    void aggregateCentroids() {
+    void federatedAveraging() {
         if (rank == 0) {
             // Master aggregates centroids from all workers
             vector<Centroid> aggregated_centroids(k_clusters, Centroid(dimensions));
@@ -366,7 +413,10 @@ public:
                     int worker_count;
 
                     MPI_Recv(worker_centroid.data(), dimensions, MPI_DOUBLE, worker, 100 + i, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                    comm_tracker.addReceive(dimensions * sizeof(double));
+                    
                     MPI_Recv(&worker_count, 1, MPI_INT, worker, 200 + i, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                    comm_tracker.addReceive(sizeof(int));
 
                     total_point_counts[i] += worker_count;
                     if (worker_count > 0) {
@@ -390,7 +440,10 @@ public:
             // Workers send their local centroids to master
             for (int i = 0; i < k_clusters; i++) {
                 MPI_Send(local_centroids[i].center.data(), dimensions, MPI_DOUBLE, 0, 100 + i, MPI_COMM_WORLD);
+                comm_tracker.addSend(dimensions * sizeof(double));
+                
                 MPI_Send(&local_centroids[i].point_count, 1, MPI_INT, 0, 200 + i, MPI_COMM_WORLD);
+                comm_tracker.addSend(sizeof(int));
             }
         }
 
@@ -402,7 +455,7 @@ public:
         double inertia = 0.0;
         for (const auto& point : local_data) {
             if (point.cluster_label >= 0 && point.cluster_label < k_clusters) {
-                double distance = calculateDistance(point.features, global_centroids[point.cluster_label].center);
+                double distance = euclideanDistance(point.features, global_centroids[point.cluster_label].center);
                 inertia += distance * distance;
             }
         }
@@ -414,7 +467,10 @@ public:
         double global_inertia = 0.0;
         
         MPI_Reduce(&local_inertia, &global_inertia, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+        comm_tracker.addSend(sizeof(double)); // For non-root processes
+        
         MPI_Bcast(&global_inertia, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+        comm_tracker.addBroadcast(sizeof(double));
         
         return global_inertia;
     }
@@ -424,7 +480,7 @@ public:
             cout << "Process " << rank << " starting training with " << local_data.size() << " data points" << endl;
         }
         
-        initializeCentroidsKMeansPlusPlus();
+        initialiseCentroidsKMeansPlusPlus();
         
         double previous_inertia = numeric_limits<double>::max();
         bool has_converged = false;
@@ -434,7 +490,7 @@ public:
             performLocalClustering();
             
             // Federated averaging
-            aggregateCentroids();
+            federatedAveraging();
             
             // Check convergence
             double current_inertia = calculateGlobalInertia();
@@ -451,6 +507,8 @@ public:
             // Broadcast convergence decision
             int convergence_flag = has_converged ? 1 : 0;
             MPI_Bcast(&convergence_flag, 1, MPI_INT, 0, MPI_COMM_WORLD);
+            comm_tracker.addBroadcast(sizeof(int));
+            
             has_converged = (convergence_flag == 1);
             
             if (has_converged) break;
@@ -461,7 +519,7 @@ public:
         }
     }
 
-    void runInference() {
+    void test() {
         if (rank != 0) return;  // Only master runs inference
 
         cout << "\n=== Running Inference on Test Data ===" << endl;
@@ -472,7 +530,7 @@ public:
             int best_cluster = 0;
 
             for (int i = 0; i < k_clusters; i++) {
-                double distance = calculateDistance(point.features, global_centroids[i].center);
+                double distance = euclideanDistance(point.features, global_centroids[i].center);
                 if (distance < min_distance) {
                     min_distance = distance;
                     best_cluster = i;
@@ -494,7 +552,23 @@ public:
         }
     }
 
-    void exportResults() {
+    void displayCommunicationStats() {
+        // Gather communication stats from all processes
+        CommTracker global_stats;
+        
+        MPI_Reduce(&comm_tracker.total_bytes_sent, &global_stats.total_bytes_sent, 1, MPI_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+        MPI_Reduce(&comm_tracker.total_bytes_received, &global_stats.total_bytes_received, 1, MPI_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+        MPI_Reduce(&comm_tracker.broadcast_bytes, &global_stats.broadcast_bytes, 1, MPI_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+        MPI_Reduce(&comm_tracker.p2p_bytes, &global_stats.p2p_bytes, 1, MPI_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+        
+        if (rank == 0) {
+            cout << "\n=== Communication Volume Statistics ===" << endl;
+            cout << "Total communication volume: " << fixed << setprecision(3) 
+                 << global_stats.getTotalMB() << " MB" << endl;
+        }
+    }
+
+    void exportAll() {
         if (rank != 0) return;  // Only master exports
 
         try {
@@ -539,7 +613,7 @@ private:
     }
 
     void exportTestAssignments() {
-        ofstream file("./fed_cluster_assignments/test_assignments.csv");
+        ofstream file("./fed_cluster_results/test_assignments.csv");
         if (!file.is_open()) {
             cout << "Failed to create test assignments file" << endl;
             return;
@@ -603,11 +677,14 @@ int main(int argc, char* argv[]) {
         
         // Inference phase
         double inference_start = MPI_Wtime();
-        fed_kmeans.runInference();
+        fed_kmeans.test();
         double inference_time = MPI_Wtime() - inference_start;
         
         // Export results
-        fed_kmeans.exportResults();
+        fed_kmeans.exportAll();
+        
+        // Display communication statistics
+        fed_kmeans.displayCommunicationStats();
         
         double total_time = MPI_Wtime() - start_time;
         
