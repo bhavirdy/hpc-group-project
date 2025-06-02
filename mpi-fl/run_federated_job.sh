@@ -10,7 +10,7 @@
 
 make
 
-NUM_PROCS=$1
+NUM_PROCS=$(( $1 + 1 ))
 K_CLUSTERS=6
 
 echo "Running Federated K-Means with $NUM_PROCS processes and $K_CLUSTERS clusters"
