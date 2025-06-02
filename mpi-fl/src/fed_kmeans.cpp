@@ -572,7 +572,7 @@ public:
         if (rank != 0) return;  // Only master exports
 
         try {
-            filesystem::create_directories("./fed_cluster_results");
+            filesystem::create_directories("./fed_cluster_assignments");
             
             // Export centroids
             exportCentroids();
@@ -587,7 +587,7 @@ public:
 
 private:
     void exportCentroids() {
-        ofstream file("./fed_cluster_results/centroids.csv");
+        ofstream file("./fed_cluster_assignments/centroids.csv");
         if (!file.is_open()) {
             cout << "Failed to create centroids file" << endl;
             return;
@@ -609,11 +609,11 @@ private:
             file << "\n";
         }
         
-        cout << "\nExported centroids to ./fed_cluster_results/centroids.csv" << endl;
+        cout << "\nExported centroids to ./fed_cluster_assignments/centroids.csv" << endl;
     }
 
     void exportTestAssignments() {
-        ofstream file("./fed_cluster_results/test_assignments.csv");
+        ofstream file("./fed_cluster_assignments/test_assignments.csv");
         if (!file.is_open()) {
             cout << "Failed to create test assignments file" << endl;
             return;
@@ -636,7 +636,7 @@ private:
             file << "\n";
         }
         
-        cout << "Exported test assignments to ./fed_cluster_results/test_assignments.csv" << endl;
+        cout << "Exported test assignments to ./fed_cluster_assignments/test_assignments.csv" << endl;
     }
 };
 
@@ -697,7 +697,7 @@ int main(int argc, char* argv[]) {
             cout << "Total execution time: " << total_time << " seconds" << endl;
             cout << "\nOutput files:" << endl;
             cout << "- Centroids: ./fed_cluster_results/centroids.csv" << endl;
-            cout << "- Test assignments: ./fed_cluster_results/test_assignments.csv" << endl;
+            cout << "- Test assignments: ./fed_cluster_assignments/test_assignments.csv" << endl;
         }
         
     } catch (const exception& e) {
