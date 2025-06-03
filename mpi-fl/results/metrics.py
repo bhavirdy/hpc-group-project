@@ -2,7 +2,7 @@ import pandas as pd
 from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score, silhouette_score
 
 # Load data
-assignments_df = pd.read_csv('./cent_cluster_assignments/test_assignments.csv')
+assignments_df = pd.read_csv('./results/uci_har/cent_cluster_assignments/test_assignments.csv')
 y_test = pd.read_csv('./data/uci_har/processed/test/y_test.csv', header=None).squeeze()  # true labels
 
 # Extract cluster assignments and features
