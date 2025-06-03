@@ -13,8 +13,3 @@ make || { echo "Make failed"; exit 1; }
 
 K_CLUSTERS=6
 ./cent_kmeans $K_CLUSTERS || { echo "K-means failed"; exit 1; }
-
-# echo "=== Calculating Metrics ==="
-# python3 ./cent_cluster_assignments/metrics.py || { echo "Metrics script failed"; exit 1; }
-
-# echo "=== Job completed at $(date) ==="

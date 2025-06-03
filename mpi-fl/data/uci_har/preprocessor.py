@@ -5,10 +5,10 @@ from sklearn.decomposition import PCA
 import os
 
 # Define paths
-base_dir = './data/uci_har/UCI HAR Dataset'
+base_dir = './data/uci_har/raw'
 train_dir = os.path.join(base_dir, 'train')
 test_dir = os.path.join(base_dir, 'test')
-output_dir = './data/uci_har/processed_data'
+output_dir = './data/uci_har/processed'
 os.makedirs(output_dir, exist_ok=True)
 
 # Load data function

@@ -14,6 +14,61 @@
 
 using namespace std;
 
+// Configuration struct to hold all file paths
+struct DatasetConfig {
+    string name;
+    string train_split_dir;
+    string train_full_file;
+    string test_file;
+    string export_dir;
+    
+    DatasetConfig(const string& dataset_name, 
+                  const string& split_dir, 
+                  const string& full_train, 
+                  const string& test_path, 
+                  const string& export_path) 
+        : name(dataset_name), train_split_dir(split_dir), train_full_file(full_train), 
+          test_file(test_path), export_dir(export_path) {}
+};
+
+// Dataset configurations
+class DatasetConfigurations {
+public:
+    static DatasetConfig getUCIHAR() {
+        return DatasetConfig(
+            "UCI-HAR",
+            "./data/uci_har/processed/train/split_data",
+            "./data/uci_har/processed/train/X_train_pca.csv",
+            "./data/uci_har/processed/test/X_test_pca.csv",
+            "./results/uci_har/fed_cluster_assignments"
+        );
+    }
+    
+    static DatasetConfig getMNIST() {
+        return DatasetConfig(
+            "MNIST",
+            "./data/mnist/processed/train/split_data",
+            "./data/mnist/processed/train/X_train_pca.csv",
+            "./data/mnist/processed/test/X_test_pca.csv",
+            "./results/mnist/fed_cluster_assignments"
+        );
+    }
+    
+    static vector<string> getAvailableDatasets() {
+        return {"uci-har", "mnist"};
+    }
+    
+    static DatasetConfig getConfig(const string& dataset_name) {
+        if (dataset_name == "uci-har") {
+            return getUCIHAR();
+        } else if (dataset_name == "mnist") {
+            return getMNIST();
+        } else {
+            throw invalid_argument("Unknown dataset: " + dataset_name);
+        }
+    }
+};
+
 struct Point {
     vector<double> features;
     int cluster_label;
@@ -86,7 +141,7 @@ private:
     
     // Data storage
     vector<Point> local_data;
-    vector<Point> test_data;  // Only used by master
+    vector<Point> test_data;
     
     // Clustering state
     vector<Centroid> global_centroids;
@@ -94,10 +149,13 @@ private:
     
     // Communication tracking
     CommTracker comm_tracker;
+    
+    // Dataset configuration
+    DatasetConfig config;
 
 public:
-    FederatedKMeans(int k, int max_iter = 100, double tolerance = 1e-6) 
-        : k_clusters(k), dimensions(0), max_iterations(max_iter), convergence_tolerance(tolerance) {
+    FederatedKMeans(int k, const DatasetConfig& dataset_config, int max_iter = 100, double tolerance = 1e-6) 
+        : k_clusters(k), config(dataset_config), dimensions(0), max_iterations(max_iter), convergence_tolerance(tolerance) {
         MPI_Comm_rank(MPI_COMM_WORLD, &rank);
         MPI_Comm_size(MPI_COMM_WORLD, &size);
         
@@ -106,18 +164,18 @@ public:
         }
     }
 
-    vector<string> findDataFiles(const string& directory = "./data/uci_har/processed/train/split_data") {
+    vector<string> findDataFiles() {
         vector<string> files;
         
-        if (!filesystem::exists(directory)) {
+        if (!filesystem::exists(config.train_split_dir)) {
             if (rank == 0) {
-                cout << "Warning: Directory does not exist: " << directory << endl;
+                cout << "Warning: Directory does not exist: " << config.train_split_dir << endl;
             }
             return files;
         }
         
         try {
-            for (const auto& entry : filesystem::directory_iterator(directory)) {
+            for (const auto& entry : filesystem::directory_iterator(config.train_split_dir)) {
                 if (entry.path().extension() == ".csv") {
                     files.push_back(entry.path().string());
                 }
@@ -180,8 +238,6 @@ public:
             }
         }
 
-        cout << "Process " << rank << " loaded " << loaded_points 
-             << " points from " << filename << endl;
         return loaded_points > 0;
     }
 
@@ -192,12 +248,12 @@ public:
             int num_workers = size - 1;
 
             if (train_files.empty()) {
-                cout << "No training files found!" << endl;
+                cout << "No training files found in " << config.train_split_dir << "!" << endl;
                 return;
             }
 
-            cout << "Distributing " << train_files.size() 
-                 << " files to " << num_workers << " workers" << endl;
+            cout << "Distributing " << train_files.size() << " files from " << config.name 
+                 << " dataset to " << num_workers << " workers" << endl;
 
             // Round-robin distribution of files to workers
             for (size_t i = 0; i < train_files.size(); i++) {
@@ -246,25 +302,26 @@ public:
         comm_tracker.addBroadcast(sizeof(int));
     }
 
-    void loadTestData(const string& test_file = "./data/uci_har/processed/test/X_test_pca.csv") {
+    void loadTestData() {
         if (rank != 0) return;  // Only master loads test data
         
-        cout << "Loading test data..." << endl;
-        if (loadDataFromFile(test_file, test_data)) {
-            cout << "Loaded " << test_data.size() << " test points" << endl;
+        if (loadDataFromFile(config.test_file, test_data)) {
+            cout << "Loaded " << test_data.size() << " test points from " << config.name << " dataset" << endl;
         }
     }
 
-    void initialiseCentroidsKMeansPlusPlus(const string& full_training_file = "./data/uci_har/processed/train/X_train_pca.csv") {
+    void initialiseCentroidsKMeansPlusPlus() {
         global_centroids.resize(k_clusters);
         
         if (rank == 0) {
-            // Master performs K-means++ initialization
+            // Master performs K-means++ initialization using full training file
             
             // Load all training data from the single file
             vector<Point> all_training_data;
-            if (!full_training_file.empty() && loadDataFromFile(full_training_file, all_training_data)) {
+            if (!config.train_full_file.empty() && loadDataFromFile(config.train_full_file, all_training_data)) {
+                cout << "Using " << config.train_full_file << " for K-means++ initialization" << endl;
             } else {
+                cout << "Warning: Could not load full training data for initialization" << endl;
                 return;
             }
                         
@@ -324,7 +381,6 @@ public:
                     global_centroids[c].center[j] = all_training_data[selected_idx].features[j];
                 }
             }
-            
             
         } else {
             // Workers initialize empty centroid structures
@@ -476,10 +532,6 @@ public:
     }
 
     void train() {
-        if (rank > 0) {
-            cout << "Process " << rank << " starting training with " << local_data.size() << " data points" << endl;
-        }
-        
         initialiseCentroidsKMeansPlusPlus();
         
         double previous_inertia = numeric_limits<double>::max();
@@ -496,9 +548,8 @@ public:
             double current_inertia = calculateGlobalInertia();
             
             if (rank == 0) {
-                
                 if (abs(previous_inertia - current_inertia) < convergence_tolerance) {
-                    cout << "Converged after " << (iteration + 1) << " iterations" << endl;
+                    cout << "Federated K-Means converged after " << (iteration + 1) << " iterations" << endl;
                     has_converged = true;
                 }
                 previous_inertia = current_inertia;
@@ -513,16 +564,12 @@ public:
             
             if (has_converged) break;
         }
-        
-        if (rank == 0) {
-            cout << "Training completed" << endl;
-        }
     }
 
     void test() {
         if (rank != 0) return;  // Only master runs inference
 
-        cout << "\n=== Running Inference on Test Data ===" << endl;
+        cout << "\n=== Running Inference on " << config.name << " Test Data ===" << endl;
         
         // Assign cluster labels to test data
         for (auto& point : test_data) {
@@ -568,77 +615,64 @@ public:
         }
     }
 
-    void exportAll() {
+    void exportTestAssignments() {
         if (rank != 0) return;  // Only master exports
 
         try {
-            filesystem::create_directories("./fed_cluster_assignments");
+            filesystem::create_directories(config.export_dir);
+            string filepath = config.export_dir + "/test_assignments.csv";
             
-            // Export centroids
-            exportCentroids();
+            ofstream file(filepath);
+            if (!file.is_open()) {
+                cout << "Failed to create test assignments file: " << filepath << endl;
+                return;
+            }
+
+            // Write header
+            file << "point_index,cluster_assignment";
+            for (int j = 0; j < dimensions; j++) {
+                file << ",feature_" << j;
+            }
+            file << "\n";
+
+            // Write test point assignments
+            for (size_t i = 0; i < test_data.size(); i++) {
+                const auto& point = test_data[i];
+                file << i << "," << point.cluster_label;
+                for (int j = 0; j < dimensions; j++) {
+                    file << "," << fixed << setprecision(6) << point.features[j];
+                }
+                file << "\n";
+            }
             
-            // Export test assignments
-            exportTestAssignments();
-            
+            cout << "Test assignments exported to: " << filepath << endl;
+                
         } catch (const exception& e) {
             cout << "Error creating output directory: " << e.what() << endl;
         }
     }
-
-private:
-    void exportCentroids() {
-        ofstream file("./fed_cluster_assignments/centroids.csv");
-        if (!file.is_open()) {
-            cout << "Failed to create centroids file" << endl;
-            return;
-        }
-
-        // Write header
-        file << "cluster_id";
-        for (int j = 0; j < dimensions; j++) {
-            file << ",feature_" << j;
-        }
-        file << "\n";
-
-        // Write centroid data
-        for (int i = 0; i < k_clusters; i++) {
-            file << i;
-            for (int j = 0; j < dimensions; j++) {
-                file << "," << fixed << setprecision(6) << global_centroids[i].center[j];
-            }
-            file << "\n";
-        }
-        
-        cout << "\nExported centroids to ./fed_cluster_assignments/centroids.csv" << endl;
-    }
-
-    void exportTestAssignments() {
-        ofstream file("./fed_cluster_assignments/test_assignments.csv");
-        if (!file.is_open()) {
-            cout << "Failed to create test assignments file" << endl;
-            return;
-        }
-
-        // Write header
-        file << "point_index,cluster_assignment";
-        for (int j = 0; j < dimensions; j++) {
-            file << ",feature_" << j;
-        }
-        file << "\n";
-
-        // Write test point assignments
-        for (size_t i = 0; i < test_data.size(); i++) {
-            const auto& point = test_data[i];
-            file << i << "," << point.cluster_label;
-            for (int j = 0; j < dimensions; j++) {
-                file << "," << fixed << setprecision(6) << point.features[j];
-            }
-            file << "\n";
-        }
-        
-        cout << "Exported test assignments to ./fed_cluster_assignments/test_assignments.csv" << endl;
-    }
 };
+
+void printUsage(const string& program_name) {
+    cout << "Usage: " << program_name << " <k_clusters> <dataset> [max_iterations] [tolerance]" << endl;
+    cout << "Parameters:" << endl;
+    cout << "  k_clusters:      Number of clusters (e.g., 2, 5, 10)" << endl;
+    cout << "  dataset:         Dataset to use" << endl;
+    cout << "  max_iterations:  Maximum iterations (default: 100)" << endl;
+    cout << "  tolerance:       Convergence tolerance (default: 1e-6)" << endl;
+    
+    auto available_datasets = DatasetConfigurations::getAvailableDatasets();
+    cout << "Available datasets: ";
+    for (size_t i = 0; i < available_datasets.size(); i++) {
+        cout << available_datasets[i];
+        if (i < available_datasets.size() - 1) cout << ", ";
+    }
+    cout << endl;
+    
+    cout << "\nExamples:" << endl;
+    cout << "  mpirun -n 4 " << program_name << " 6 uci-har" << endl;
+    cout << "  mpirun -n 8 " << program_name << " 10 mnist 150 1e-8" << endl;
+}
 
 int main(int argc, char* argv[]) {
     MPI_Init(&argc, &argv);
@@ -649,21 +683,52 @@ int main(int argc, char* argv[]) {
 
     try {
         // Parse command line arguments
-        if (argc < 2) {
+        if (argc < 3) {
             if (rank == 0) {
-                cout << "Usage: " << argv[0] << " <k_clusters>" << endl;
-                cout << "Example: " << argv[0] << " 6 " << endl;
+                printUsage(argv[0]);
             }
             MPI_Finalize();
             return 1;
         }
         
         int k = stoi(argv[1]);
-        int max_iter = (argc > 2) ? stoi(argv[2]) : 100;
-        double tolerance = (argc > 3) ? stod(argv[3]) : 1e-6;
+        string dataset_name = argv[2];
+        int max_iter = (argc > 3) ? stoi(argv[3]) : 100;
+        double tolerance = (argc > 4) ? stod(argv[4]) : 1e-6;
+        
+        // Validate dataset name
+        auto available_datasets = DatasetConfigurations::getAvailableDatasets();
+        bool valid_dataset = false;
+        for (const auto& ds : available_datasets) {
+            if (ds == dataset_name) {
+                valid_dataset = true;
+                break;
+            }
+        }
+        
+        if (!valid_dataset) {
+            if (rank == 0) {
+                cout << "Error: Invalid dataset '" << dataset_name << "'" << endl;
+                printUsage(argv[0]);
+            }
+            MPI_Finalize();
+            return 1;
+        }
+        
+        // Get dataset configuration
+        DatasetConfig config = DatasetConfigurations::getConfig(dataset_name);
+        
+        if (rank == 0) {
+            cout << "\n=== Federated K-Means ===" << endl;
+            cout << "Dataset: " << config.name << endl;
+            cout << "K clusters: " << k << endl;
+            cout << "Max iterations: " << max_iter << endl;
+            cout << "Tolerance: " << tolerance << endl;
+            cout << "MPI processes: " << size << endl;
+        }
         
         // Create and run federated K-means
-        FederatedKMeans fed_kmeans(k, max_iter, tolerance);
+        FederatedKMeans fed_kmeans(k, config, max_iter, tolerance);
         
         // Data distribution phase
         double start_time = MPI_Wtime();
@@ -681,7 +746,7 @@ int main(int argc, char* argv[]) {
         double inference_time = MPI_Wtime() - inference_start;
         
         // Export results
-        fed_kmeans.exportAll();
+        fed_kmeans.exportTestAssignments();
         
         // Display communication statistics
         fed_kmeans.displayCommunicationStats();
@@ -690,14 +755,9 @@ int main(int argc, char* argv[]) {
         
         // Display results
         if (rank == 0) {
-            cout << "\n=== Performance Results ===" << endl;
-            cout << "Data distribution time: " << fixed << setprecision(3) << distribution_time << " seconds" << endl;
             cout << "Training time: " << training_time << " seconds" << endl;
-            cout << "Inference time: " << inference_time << " seconds" << endl;
-            cout << "Total execution time: " << total_time << " seconds" << endl;
             cout << "\nOutput files:" << endl;
-            cout << "- Centroids: ./fed_cluster_results/centroids.csv" << endl;
-            cout << "- Test assignments: ./fed_cluster_assignments/test_assignments.csv" << endl;
+            cout << "- Test assignments: " << config.export_dir << "/test_assignments.csv" << endl;
         }
         
     } catch (const exception& e) {

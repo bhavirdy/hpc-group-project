@@ -9,6 +9,56 @@
 
 using namespace std;
 
+// Configuration struct to hold all file paths
+struct DatasetConfig {
+    string name;
+    string train_file;
+    string test_file;
+    string export_dir;
+    
+    DatasetConfig(const string& dataset_name, 
+                  const string& train_path, 
+                  const string& test_path, 
+                  const string& export_path) 
+        : name(dataset_name), train_file(train_path), test_file(test_path), export_dir(export_path) {}
+};
+
+// Dataset configurations
+class DatasetConfigurations {
+public:
+    static DatasetConfig getUCIHAR() {
+        return DatasetConfig(
+            "UCI-HAR",
+            "./data/uci_har/processed/train/X_train_pca.csv",
+            "./data/uci_har/processed/test/X_test_pca.csv",
+            "./results/uci_har/cent_cluster_assignments"
+        );
+    }
+    
+    static DatasetConfig getMNIST() {
+        return DatasetConfig(
+            "MNIST",
+            "./data/mnist/processed/train/X_train_pca.csv",
+            "./data/mnist/processed/test/X_test_pca.csv",
+            "./results/mnist/cent_cluster_assignments"
+        );
+    }
+    
+    static vector<string> getAvailableDatasets() {
+        return {"uci-har", "mnist"};
+    }
+    
+    static DatasetConfig getConfig(const string& dataset_name) {
+        if (dataset_name == "uci-har") {
+            return getUCIHAR();
+        } else if (dataset_name == "mnist") {
+            return getMNIST();
+        } else {
+            throw invalid_argument("Unknown dataset: " + dataset_name);
+        }
+    }
+};
+
 struct Point {
     vector<double> features;
     int label;
@@ -35,17 +85,16 @@ private:
     vector<Point> data;
     vector<Point> test_data;
     vector<Centroid> centroids;
-    string export_dir;
+    DatasetConfig config;
   
 public:
-    CentralisedKMeans(int k_clusters, int max_iter = 100, double tol = 1e-6) 
-                      : k(k_clusters), max_iterations(max_iter), tolerance(tol), 
-                        export_dir("cent_cluster_assignments") {}
+    CentralisedKMeans(int k_clusters, const DatasetConfig& dataset_config, int max_iter = 100, double tol = 1e-6) 
+                      : k(k_clusters), config(dataset_config), max_iterations(max_iter), tolerance(tol) {}
     
-    void loadData(const string& filename = "./data/uci_har/processed/train/X_train_pca.csv") {
-        ifstream file(filename);
+    void loadData() {
+        ifstream file(config.train_file);
         if (!file.is_open()) {
-            cout << "Could not open " << filename << endl;
+            cout << "Could not open " << config.train_file << endl;
             return;
         }
         
@@ -74,15 +123,14 @@ public:
         
         if (!data.empty()) {
             dimensions = data[0].features.size();
-            cout << "Loaded " << data.size() << " training points " << endl; 
-
+            cout << "Loaded " << data.size() << " training points from " << config.name << " dataset" << endl; 
         }
     }
     
-    void loadTestData(const string& filename = "./data/uci_har/processed/test/X_test_pca.csv") {
-        ifstream file(filename);
+    void loadTestData() {
+        ifstream file(config.test_file);
         if (!file.is_open()) {
-            cout << "Could not open test file " << filename << endl;
+            cout << "Could not open test file " << config.test_file << endl;
             return;
         }
         
@@ -109,7 +157,7 @@ public:
             }
         }
         
-        cout << "Loaded " << test_data.size() << " test points" << endl;
+        cout << "Loaded " << test_data.size() << " test points from " << config.name << " dataset" << endl;
     }
     
     double euclideanDistance(const vector<double>& a, const vector<double>& b) {
@@ -121,7 +169,7 @@ public:
         return sqrt(sum);
     }
     
-    void initializeCentroidsKMeansPlusPlus() {
+    void initialiseCentroidsKMeansPlusPlus() {
         if (data.empty()) return;
         
         random_device rd;
@@ -173,13 +221,12 @@ public:
             
             centroids[c] = Centroid(data[selected_index].features);
         }
-        
     }
 
     void train() {
         if (data.empty()) return;
         
-        initializeCentroidsKMeansPlusPlus();
+        initialiseCentroidsKMeansPlusPlus();
         
         double prev_inertia = numeric_limits<double>::max();
         bool converged = false;
@@ -232,7 +279,7 @@ public:
                         
             // Check for convergence
             if (abs(prev_inertia - inertia) < tolerance) {
-                cout << "Centralised converged after " << iteration + 1 << " iterations" << endl;
+                cout << "Centralised K-Means converged after " << iteration + 1 << " iterations" << endl;
                 converged = true;
                 break;
             }
@@ -247,7 +294,7 @@ public:
             return;
         }
         
-        cout << "\n=== Testing on Test Data ===" << endl;
+        cout << "\n=== Testing on " << config.name << " Test Data ===" << endl;
         
         // Assign test points to clusters
         for (auto& point : test_data) {
@@ -284,43 +331,7 @@ public:
             cout << "Cluster " << i << ": " << cluster_counts[i] << " points" << endl;
         }
     }
-    
-    void exportCentroids(const string& filename = "final_centroids.csv") {
-        if (centroids.empty()) {
-            cout << "No centroids to export" << endl;
-            return;
-        }
-        
-        // Create export directory if it doesn't exist
-        filesystem::create_directories(export_dir);
-        string filepath = export_dir + "/" + filename;
-        
-        ofstream file(filepath);
-        if (!file.is_open()) {
-            cout << "Could not create centroids file: " << filepath << endl;
-            return;
-        }
-        
-        // Write header
-        file << "cluster_id";
-        for (int j = 0; j < dimensions; j++) {
-            file << ",feature_" << j;
-        }
-        file << "\n";
-        
-        // Write centroids
-        for (int i = 0; i < k; i++) {
-            file << i;
-            for (int j = 0; j < dimensions; j++) {
-                file << "," << fixed << setprecision(8) << centroids[i].center[j];
-            }
-            file << "\n";
-        }
-        
-        file.close();
-        cout << "Centroids exported to: " << filepath << endl;
-    }
-    
+       
     void exportTestAssignments(const string& filename = "test_assignments.csv") {
         if (test_data.empty()) {
             cout << "No test data to export" << endl;
@@ -328,8 +339,8 @@ public:
         }
         
         // Create export directory if it doesn't exist
-        filesystem::create_directories(export_dir);
-        string filepath = export_dir + "/" + filename;
+        filesystem::create_directories(config.export_dir);
+        string filepath = config.export_dir + "/" + filename;
         
         ofstream file(filepath);
         if (!file.is_open()) {
@@ -357,48 +368,87 @@ public:
         file.close();
         cout << "Test assignments exported to: " << filepath << endl;
     }
-    
-    void exportAll() {
-        cout << "\n=== Exporting Results ===" << endl;
-        exportCentroids();
-        if (!test_data.empty()) {
-            exportTestAssignments();
-        }
-    }
 };
+
+void printUsage(const string& program_name) {
+    cout << "Usage: " << program_name << " <k_clusters> <dataset>" << endl;
+    cout << "Parameters:" << endl;
+    cout << "  k_clusters: Number of clusters (e.g., 2, 5, 10)" << endl;
+    cout << "  dataset:    Dataset to use" << endl;
+    
+    auto available_datasets = DatasetConfigurations::getAvailableDatasets();
+    cout << "Available datasets: ";
+    for (size_t i = 0; i < available_datasets.size(); i++) {
+        cout << available_datasets[i];
+        if (i < available_datasets.size() - 1) cout << ", ";
+    }
+    cout << endl;
+    
+    cout << "\nExamples:" << endl;
+    cout << "  " << program_name << " 6 uci-har" << endl;
+    cout << "  " << program_name << " 10 mnist" << endl;
+}
 
 int main(int argc, char* argv[]) {
     
-    if (argc < 2) {
-        cerr << "Usage: " << argv[0] << " <k_clusters>" << endl;
-        cerr << "Example: " << argv[0] << " 2" << endl;
+    if (argc < 3) {
+        printUsage(argv[0]);
         return 1;
     }
     
     int k = stoi(argv[1]);
+    string dataset_name = argv[2];
     
-    cout << "\n=== Centralised K-Means (Baseline) ===" << endl;
-    CentralisedKMeans cent_kmeans(k);
+    // Validate dataset name
+    auto available_datasets = DatasetConfigurations::getAvailableDatasets();
+    bool valid_dataset = false;
+    for (const auto& ds : available_datasets) {
+        if (ds == dataset_name) {
+            valid_dataset = true;
+            break;
+        }
+    }
     
-    // Load training data
-    cent_kmeans.loadData();
+    if (!valid_dataset) {
+        cout << "Error: Invalid dataset '" << dataset_name << "'" << endl;
+        printUsage(argv[0]);
+        return 1;
+    }
     
-    // Load test data
-    cent_kmeans.loadTestData();
-    
-    // Train the model
-    auto start = chrono::high_resolution_clock::now();
-    cent_kmeans.train();
-    auto end = chrono::high_resolution_clock::now();
-    chrono::duration<double> elapsed = end - start;
-    
-    cout << "Centralised training time: " << elapsed.count() << " seconds" << endl;
-    
-    // Test the model
-    cent_kmeans.test();
-    
-    // Export all results
-    cent_kmeans.exportAll();
+    try {
+        // Get dataset configuration
+        DatasetConfig config = DatasetConfigurations::getConfig(dataset_name);
+        
+        cout << "\n=== Centralised K-Means (Baseline) ===" << endl;
+        cout << "Dataset: " << config.name << endl;
+        cout << "K clusters: " << k << endl;
+        
+        CentralisedKMeans cent_kmeans(k, config);
+        
+        // Load training data
+        cent_kmeans.loadData();
+        
+        // Load test data
+        cent_kmeans.loadTestData();
+        
+        // Train the model
+        auto start = chrono::high_resolution_clock::now();
+        cent_kmeans.train();
+        auto end = chrono::high_resolution_clock::now();
+        chrono::duration<double> elapsed = end - start;
+        
+        cout << "Centralised training time: " << elapsed.count() << " seconds" << endl;
+        
+        // Test the model
+        cent_kmeans.test();
+        
+        // Export results
+        cent_kmeans.exportTestAssignments();
+        
+    } catch (const exception& e) {
+        cout << "Error: " << e.what() << endl;
+        return 1;
+    }
 
     return 0;
 }

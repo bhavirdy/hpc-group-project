@@ -20,4 +20,4 @@ mpirun -np $NUM_PROCS ./fed_kmeans $K_CLUSTERS
 # echo ""
 # echo "=== Calculating Metrics ==="
 
-# python3 ./fed_cluster_assignments/metrics.py
+# python3 ./results/fed_cluster_assignments/metrics.py

@@ -1,79 +1,52 @@
-const int image_width = 28;
-const int image_height = 28;
-const double min_value = 0.0;
-const double max_value = 255.0;    
+import pandas as pd
+import numpy as np
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+import os
 
-// Normalize pixel values from 0-255 to 0-1 range
-    void normalizeFeatures(vector<double>& features) {
-        for (double& f : features) {
-            f = (f - min_value) / (max_value - min_value);
-            // Clamp to [0, 1] range
-            f = max(0.0, min(1.0, f));
-        }
-    }    
+# Paths
+RAW_DIR = "data/mnist/raw"
+PROCESSED_DIR = "data/mnist/processed"
+TRAIN_DIR = os.path.join(PROCESSED_DIR, "train")
+TEST_DIR = os.path.join(PROCESSED_DIR, "test")
+SPLIT_DIR = os.path.join(TRAIN_DIR, "split_data")
 
-void applyTransformation(Point& point, int worker_id) {
-        vector<double> transformed_image = point.features;
+# Ensure directories exist
+os.makedirs(SPLIT_DIR, exist_ok=True)
+os.makedirs(TEST_DIR, exist_ok=True)
 
-        // Apply different transformations to simulate data heterogeneity
-        switch (worker_id % 4) {
-            case 1: // 90-degree rotation
-                transformed_image = rotateImage90(transformed_image);
-                break;
-                
-            case 2: // 180-degree rotation
-                transformed_image = rotateImage180(transformed_image);
-                break;
-                
-            case 3: // 270-degree rotation
-                transformed_image = rotateImage270(transformed_image);
-                break;
-            default: // No transformation
-                break;
-        }
-    }
-    
-    // Rotate image 90 degrees clockwise
-    vector<double> rotateImage90(const vector<double>& image) {
-        vector<double> rotated(image.size());
-        for (int y = 0; y < image_height; y++) {
-            for (int x = 0; x < image_width; x++) {
-                int old_idx = y * image_width + x;
-                int new_x = image_height - 1 - y;
-                int new_y = x;
-                int new_idx = new_y * image_width + new_x;
-                rotated[new_idx] = image[old_idx];
-            }
-        }
-        return rotated;
-    }
-    
-    // Rotate image 180 degrees
-    vector<double> rotateImage180(const vector<double>& image) {
-        vector<double> rotated(image.size());
-        for (int y = 0; y < image_height; y++) {
-            for (int x = 0; x < image_width; x++) {
-                int old_idx = y * image_width + x;
-                int new_x = image_width - 1 - x;
-                int new_y = image_height - 1 - y;
-                int new_idx = new_y * image_width + new_x;
-                rotated[new_idx] = image[old_idx];
-            }
-        }
-        return rotated;
-    }
-    
-    // Rotate image 270 degrees clockwise
-    vector<double> rotateImage270(const vector<double>& image) {
-        vector<double> rotated(image.size());
-        for (int y = 0; y < image_height; y++) {
-            for (int x = 0; x < image_width; x++) {
-                int old_idx = y * image_width + x;
-                int new_x = y;
-                int new_y = image_width - 1 - x;
-                int new_idx = new_y * image_width + new_x;
-                rotated[new_idx] = image[old_idx];
-            }
-        }
-        return rotated;
-    }
+# Load data
+train_df = pd.read_csv(os.path.join(RAW_DIR, "mnist_train.csv"))
+test_df = pd.read_csv(os.path.join(RAW_DIR, "mnist_test.csv"))
+
+# Separate labels
+y_train = train_df['label']
+X_train = train_df.drop(columns=['label'])
+
+y_test = test_df['label']
+X_test = test_df.drop(columns=['label'])
+
+# Standardize the data
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+# Apply PCA (retain 95% variance)
+pca = PCA(n_components=0.95, random_state=42)
+X_train_pca = pca.fit_transform(X_train_scaled)
+X_test_pca = pca.transform(X_test_scaled)
+
+# Save full processed datasets
+pd.DataFrame(X_train_pca).to_csv(os.path.join(TRAIN_DIR, "X_train_pca.csv"), index=False)
+pd.DataFrame(y_train).to_csv(os.path.join(TRAIN_DIR, "y_train.csv"), index=False)
+
+pd.DataFrame(X_test_pca).to_csv(os.path.join(TEST_DIR, "X_test_pca.csv"), index=False)
+pd.DataFrame(y_test).to_csv(os.path.join(TEST_DIR, "y_test.csv"), index=False)
+
+# Split X_train_pca into 60 parts
+split_data = np.array_split(X_train_pca, 60)
+for i, part in enumerate(split_data, start=1):
+    split_path = os.path.join(SPLIT_DIR, f"X_train_{i}_pca.csv")
+    pd.DataFrame(part).to_csv(split_path, index=False)
+
+print("Preprocessing complete.")
